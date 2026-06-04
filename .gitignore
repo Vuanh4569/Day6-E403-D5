@@ -12,8 +12,16 @@ server.out.log
 server.err.log
 *.log
 
+<<<<<<< Updated upstream
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
 node_modules/
+=======
+# Python virtual environment and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+>>>>>>> Stashed changes
