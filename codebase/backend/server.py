@@ -20,12 +20,16 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path in ("/", "/prototype", "/prototype/") or path.startswith("/prototype/"):
-            if path in ("/", "/prototype", "/prototype/"):
-                target = PROTOTYPE_DIR / "index.html"
-            else:
-                target = PROTOTYPE_DIR / unquote(path.removeprefix("/prototype/"))
+            target = resolve_prototype_target(path)
             self.send_file(target)
             return
+        if path.startswith("/api/"):
+            pass
+        else:
+            target = resolve_root_static_target(path)
+            if target is not None:
+                self.send_file(target)
+                return
         if path == "/api/health":
             load_env()
             settings = get_llm_settings()
@@ -46,8 +50,11 @@ class Handler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         body = self.read_json()
         if path == "/api/ask":
-            result = agent.ask(str(body.get("question", "")))
-            self.send_json(result.to_dict())
+            result = agent.ask(
+                str(body.get("question", "")),
+                conversation=normalize_conversation(body.get("conversation")),
+            )
+            self.send_json(public_result(result))
             return
         if path == "/api/source":
             source = agent.load_source(str(body.get("source", "")))
@@ -103,6 +110,44 @@ def decode_request_body(raw_bytes: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return raw_bytes.decode("utf-8", errors="replace")
+
+
+def resolve_prototype_target(path: str) -> Path:
+    if path in ("/", "/prototype", "/prototype/"):
+        return PROTOTYPE_DIR / "index.html"
+    return PROTOTYPE_DIR / unquote(path.removeprefix("/prototype/"))
+
+
+def resolve_root_static_target(path: str) -> Path | None:
+    relative = unquote(path.removeprefix("/"))
+    if not relative:
+        return None
+    return PROTOTYPE_DIR / relative
+
+
+def normalize_conversation(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    cleaned: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip()
+        content = str(item.get("content", "")).strip()
+        if role in {"user", "agent", "assistant"} and content:
+            cleaned.append({"role": "assistant" if role == "agent" else role, "content": content})
+    return cleaned
+
+
+def public_result(result: Any) -> dict[str, Any]:
+    return {
+        "route": result.route.value,
+        "source_status": result.source_status,
+        "answer": result.answer,
+        "refusal": result.refusal,
+        "suggested_follow_up": result.suggested_follow_up,
+        "follow_up_options": result.follow_up_options or [],
+    }
 
 
 def main() -> None:

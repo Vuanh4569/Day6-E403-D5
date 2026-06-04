@@ -6,13 +6,18 @@ import os
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV_PATH = ROOT / ".env"
-ALT_ENV_PATH = ROOT / ".evn"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ENV_CANDIDATES = (
+    ROOT / ".env",
+    ROOT / ".evn",
+    REPO_ROOT / ".env",
+    REPO_ROOT / ".evn",
+)
 
 
-def load_env(path: Path = ENV_PATH) -> None:
-    env_path = path if path.exists() else ALT_ENV_PATH
-    if not env_path.exists():
+def load_env(path: Path | None = None) -> None:
+    env_path = path if path is not None else next((candidate for candidate in ENV_CANDIDATES if candidate.exists()), None)
+    if env_path is None or not env_path.exists():
         return
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()

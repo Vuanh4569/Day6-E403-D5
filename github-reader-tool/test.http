@@ -1,6 +1,0 @@
-POST http://localhost:3000/api/read-github
-Content-Type: application/json
-
-{
-  "githubUrl": "https://github.com/Vuanh4569/Day6-E403-D5"
-}

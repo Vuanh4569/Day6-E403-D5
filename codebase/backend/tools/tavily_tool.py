@@ -77,3 +77,19 @@ def mock_tavily_search(query: str) -> list[dict[str, str]]:
             "snippet": f"Mock Tavily result for '{query}'. Set TAVILY_API_KEY in .env to use real search.",
         }
     ]
+
+
+def tavily_multi_search(queries: list[str], max_results_per_query: int = 3, max_results_total: int = 6) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for query in queries:
+        for item in tavily_search(query, max_results=max_results_per_query):
+            key = item.get("url", "").strip() or item.get("title", "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+            if len(merged) >= max_results_total:
+                return merged
+    return merged

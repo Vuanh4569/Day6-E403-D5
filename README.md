@@ -6,40 +6,37 @@
 
 Painpoint: tài liệu học nằm rải rác ở public repo, README, slide, rubric, notebook, PDF/link và ghi chú mentor. Nếu user hỏi mơ hồ hoặc hỏi một khái niệm khó, agent phải biết khi nào cần hỏi thêm, khi nào đi search/crawl ngay, khi nào nói không biết vì thiếu source. Prototype tập trung vào Learning Content, không đoán deadline/rule nội bộ nếu không có source chính thức.
 
-## Cấu trúc nộp bài
+## Cấu trúc hiện tại
 
 ```text
 Day6-E403-D5
-├── 01-invidual-workshop/
-│   └── app-teardown.md
-├── 02-group-spec/
-│   ├── evidence-pack.md
-│   ├── thin-spec.md
-│   ├── workflow.md
+├── spec/
 │   └── README.md
-├── prototype/
-│   ├── index.html
-│   ├── styles.css
-│   └── app.js
-└── backend/
-    ├── agents/
-    │   ├── intake_router/
-    │   │   ├── agent.py
-    │   │   ├── prompt.md
-    │   │   └── README.md
-    │   ├── source_intake/
-    │   ├── retriever/
-    │   ├── answer_composer/
-    │   └── guard/
-    ├── learning_agent.py
-    ├── server.py
-    ├── run_demo.py
-    └── requirements.txt
+├── codebase/
+│   ├── README.md
+│   ├── prototype/
+│   │   ├── index.html
+│   │   ├── styles.css
+│   │   └── app.js
+│   ├── backend/
+│   │   ├── agents/
+│   │   ├── tools/
+│   │   ├── learning_agent.py
+│   │   ├── server.py
+│   │   ├── run_demo.py
+│   │   └── requirements.txt
+│   └── pdf_to_text/
+│       ├── convert.py
+│       └── README.md
+├── .env.example
+└── hackathon-rules.md
 ```
 
 ## Prototype
 
-Mở `prototype/index.html` trong browser để demo:
+UI đang chạy từ `codebase/prototype/`, backend đang chạy từ `codebase/backend/`.
+
+Mở web demo qua backend để dùng đầy đủ flow:
 
 - user paste source text, GitHub link, PDF link hoặc web link,
 - agent detect source type và chuẩn bị source ingestion,
@@ -49,14 +46,15 @@ Mở `prototype/index.html` trong browser để demo:
 - nếu đã có source khóa học, agent retrieve chunk rồi trả explanation + example + checklist,
 - agent từ chối/unknown khi thiếu nguồn hoặc user hỏi sang deadline/rule nội bộ.
 
-## Tool plan cho bản build
+## Tool status
 
 ```text
 Tavily:
   - search public web / docs / GitHub public pages nếu cần.
 
 GitHub reader:
-  - khi user paste repo/file link, đọc README/docs/rubric/notebook markdown trước.
+  - khi user paste repo/file link, backend đọc README/docs/rubric/notebook markdown trước.
+  - có fallback khi GitHub API bị rate limit: thử đọc trực tiếp các file ưu tiên từ public raw URLs.
 
 PDF reader:
   - khi user paste PDF link/file, extract text theo page rồi chunk.
@@ -66,35 +64,9 @@ GitHub:
   - `GITHUB_TOKEN` là optional, chỉ dùng để tăng rate limit khi đọc public repo.
 ```
 
-## Prototype adapter contract
+## Backend
 
-`prototype/app.js` đã có sẵn 3 adapter để cắm tool thật:
-
-```js
-window.learningAgentAdapters = {
-  tavilySearch: async (query) => [
-    { title: "Source title", url: "https://...", snippet: "Relevant snippet" }
-  ],
-  readGitHub: async (url) => ({
-    status: "loaded",
-    title: "GitHub source title",
-    text: "README/docs/rubric/notebook text",
-    note: "Optional note"
-  }),
-  readPdf: async (url) => ({
-    status: "loaded",
-    title: "PDF title",
-    text: "Extracted text by pages/sections",
-    note: "Optional note"
-  })
-};
-```
-
-Nếu chưa cắm tool thật, app dùng mock/stub để demo được route, ask loop, source check, answer và refusal.
-
-## LangChain backend
-
-Backend nằm trong `backend/`. Core chính là `LearningOSAgent`:
+Backend nằm trong `codebase/backend/`. Core chính là `LearningOSAgent`:
 
 - route câu hỏi thành `course_grounded`, `general_learning`, `program_operations`, hoặc `ambiguous`;
 - dùng LangChain-style tools cho Tavily, GitHub reader, PDF reader, web reader;
@@ -103,17 +75,17 @@ Backend nằm trong `backend/`. Core chính là `LearningOSAgent`:
 
 ## Agent architecture
 
-Agent orchestrator nằm ở [backend/learning_agent.py](backend/learning_agent.py). Các agent con nằm trong [backend/agents](backend/agents).
+Agent orchestrator nằm ở [codebase/backend/learning_agent.py](/abs/path/E:/VinUni/Day6-E403-D5/codebase/backend/learning_agent.py). Các agent con nằm trong [codebase/backend/agents](/abs/path/E:/VinUni/Day6-E403-D5/codebase/backend/agents).
 
 Đây là **1 user-facing agent**, bên trong chia thành 5 agent role:
 
 | Step | Vị trí trong code | Nhiệm vụ |
 |---|---|---|
-| Intake Router | `backend/agents/intake_router/` | Đọc câu hỏi và phân loại: course-grounded, general learning, program operations, ambiguous. |
-| Source Intake | `backend/agents/source_intake/` | Nhận GitHub/PDF/web/text source, gọi reader tương ứng, chunk tài liệu. |
-| Retriever | `backend/agents/retriever/` | Tìm chunk liên quan trong course source đã load. |
-| LLM Composer | `backend/agents/answer_composer/` + `backend/llm_provider.py` | Gọi OpenAI/Groq/Gemini để tổng hợp answer khi đã có route + evidence. |
-| Guard / Refusal | `backend/agents/guard/` | Chặn đoán khi thiếu source, ops/deadline/rule nội bộ, hoặc source không match. |
+| Intake Router | `codebase/backend/agents/intake_router/` | Đọc câu hỏi và phân loại: course-grounded, general learning, program operations, ambiguous. |
+| Source Intake | `codebase/backend/agents/source_intake/` | Nhận GitHub/PDF/web/text source, gọi reader tương ứng, chunk tài liệu. |
+| Retriever | `codebase/backend/agents/retriever/` | Tìm chunk liên quan trong course source đã load. |
+| LLM Composer | `codebase/backend/agents/answer_composer/` + `codebase/backend/llm_provider.py` | Gọi OpenAI/Groq/Gemini để tổng hợp answer khi đã có route + evidence. |
+| Guard / Refusal | `codebase/backend/agents/guard/` | Chặn đoán khi thiếu source, ops/deadline/rule nội bộ, hoặc source không match. |
 
 Mỗi folder agent có:
 
@@ -133,7 +105,7 @@ Nếu thiếu source, agent không gọi LLM để bịa câu trả lời.
 
 ## Environment
 
-Tạo file `.env` từ [.env.example](.env.example):
+Tạo file `.env` từ [.env.example](/abs/path/E:/VinUni/Day6-E403-D5/.env.example):
 
 ```powershell
 Copy-Item "Day6-E403-D5\.env.example" "Day6-E403-D5\.env"
@@ -149,18 +121,18 @@ LLM_PROVIDER=gemini
 LLM_PROVIDER=mock
 ```
 
-Điền key tương ứng trong `.env`. Nếu dùng `auto`, backend sẽ tự ưu tiên OpenAI -> Groq -> Gemini theo key đang có. Không commit `.env`.
+Điền key tương ứng trong `.env`. Nếu dùng `auto`, backend sẽ tự ưu tiên OpenAI -> Groq -> Gemini theo key đang có. `GITHUB_TOKEN` là optional nhưng rất nên có nếu muốn đọc repo public ổn định hơn. Không commit `.env`.
 
 Chạy demo logic:
 
 ```powershell
-& "C:\Users\Phucc\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" -B "Day6-E403-D5\backend\run_demo.py"
+& "C:\Users\Phucc\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" -B "Day6-E403-D5\codebase\backend\run_demo.py"
 ```
 
 Chạy local server:
 
 ```powershell
-& "C:\Users\Phucc\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" "Day6-E403-D5\backend\server.py"
+& "C:\Users\Phucc\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" "Day6-E403-D5\codebase\backend\server.py"
 ```
 
 Sau đó mở:
@@ -188,7 +160,7 @@ Kết quả sẽ có:
 
 ## Tool modules
 
-Các API/tool nằm ở [backend/tools](backend/tools):
+Các API/tool nằm ở [codebase/backend/tools](/abs/path/E:/VinUni/Day6-E403-D5/codebase/backend/tools):
 
 | Tool file | Nhiệm vụ |
 |---|---|

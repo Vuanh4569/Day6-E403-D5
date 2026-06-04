@@ -3,15 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 import re
+import unicodedata
 
 from agents.answer_composer.agent import AnswerComposerAgent
+from agents.decision_agent import DecisionAgent
 from agents.guard.agent import GuardAgent
 from agents.intake_router.agent import IntakeRouterAgent, Route
+from agents.query_planner.agent import QueryPlan, QueryPlannerAgent
 from agents.retriever.agent import RetrieverAgent
 from agents.source_intake.agent import Chunk, Source, chunk_text, detect_source_type
 from tools.github_tool import read_github
 from tools.pdf_tool import read_pdf
-from tools.tavily_tool import tavily_search
+from tools.tavily_tool import tavily_multi_search, tavily_search
 from tools.web_tool import read_web
 
 try:
@@ -33,6 +36,7 @@ class AgentResult:
     evidence: list[dict[str, Any]]
     refusal: str = ""
     suggested_follow_up: str = ""
+    follow_up_options: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,11 +48,20 @@ class AgentResult:
             "evidence": self.evidence,
             "refusal": self.refusal,
             "suggested_follow_up": self.suggested_follow_up,
+            "follow_up_options": self.follow_up_options or [],
         }
 
 
 def normalize(text: str) -> str:
     return text.lower().strip()
+
+
+def normalize_plain(text: str) -> str:
+    lowered = text.lower().strip()
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", lowered)
+        if unicodedata.category(ch) != "Mn"
+    )
 
 
 def has_any(text: str, words: list[str]) -> bool:
@@ -84,8 +97,10 @@ class LearningOSAgent:
         self.sources: list[Source] = []
         self.memory: list[dict[str, str]] = []
         self.router = IntakeRouterAgent()
+        self.decision_agent = DecisionAgent()
         self.retriever = RetrieverAgent()
         self.composer = AnswerComposerAgent()
+        self.query_planner = QueryPlannerAgent()
         self.guard = GuardAgent()
 
     def detect_route(self, question: str) -> Route:
@@ -139,80 +154,278 @@ class LearningOSAgent:
             return matches
         return [word for word in re.split(r"\W+", text) if len(word) > 3][:8]
 
-    def ask(self, question: str) -> AgentResult:
-        route = self.detect_route(question)
-        self.memory.append({"role": "user", "content": question})
+    def ask(self, question: str, conversation: list[dict[str, str]] | None = None) -> AgentResult:
+        active_conversation = list(conversation or self.memory)
+        resolved_question = self.resolve_question(question, active_conversation)
+        self.memory = active_conversation
+        if not self.memory or self.memory[-1].get("role") != "user" or self.memory[-1].get("content") != question:
+            self.memory.append({"role": "user", "content": question})
+        decision = self.decision_agent.decide(question, active_conversation, has_sources=bool(self.sources))
+        route = self.route_from_decision(decision.mode, decision.route)
 
-        if route == Route.AMBIGUOUS:
+        if decision.mode == "clarify" or route == Route.AMBIGUOUS:
             return AgentResult(
-                route=route,
+                route=Route.AMBIGUOUS,
                 source_status="waiting_for_clarification",
-                answer="Bạn đang hỏi kiến thức chung, hay hỏi theo slide/lab/tài liệu khóa học?",
-                trace=["Read question", "Route = Ambiguous", "Ask clarification"],
-                tool_calls=[],
+                answer=(
+                    "Mình cần rõ hơn một chút để trả lời đúng ý bạn.\n\n"
+                    "**Bạn đang hỏi theo hướng nào?**\n"
+                    "1. Kiến thức chung về khái niệm này\n"
+                    "2. Nội dung trong slide, lab, rubric hoặc tài liệu khóa học\n"
+                    "3. Cách áp dụng ngay vào bài đang làm"
+                ),
+                trace=["Read question", "Decision = clarify", "Ask clarification"],
+                tool_calls=self.decision_tool_calls(),
                 evidence=[],
                 suggested_follow_up="Hãy nói rõ: general knowledge hay course-grounded.",
+                follow_up_options=[
+                    "Đây là kiến thức chung",
+                    "Đây là nội dung trong slide hoặc lab",
+                    "Tôi muốn checklist áp dụng",
+                ],
             )
 
-        if route == Route.OPS:
-            refusal, draft = self.guard.ops_without_source(question)
+        if decision.mode == "small_talk":
             return AgentResult(
-                route=route,
+                route=Route.GENERAL,
+                source_status="model_knowledge_only",
+                answer=self.answer_small_talk(question),
+                trace=["Read question", "Decision = small_talk", "Answer directly without search"],
+                tool_calls=self.decision_tool_calls(),
+                evidence=[],
+            )
+
+        if decision.mode == "ops" or route == Route.OPS:
+            refusal, draft = self.guard.ops_without_source(resolved_question)
+            return AgentResult(
+                route=Route.OPS,
                 source_status="missing_official_source",
                 answer="Mình không trả lời chắc về deadline/rule nội bộ nếu chưa có source chính thức.",
-                trace=["Read question", "Route = Program Operations", "Refuse to guess"],
-                tool_calls=[],
+                trace=["Read question", "Decision = ops", "Refuse to guess"],
+                tool_calls=self.decision_tool_calls(),
                 evidence=[],
                 refusal=refusal,
                 suggested_follow_up=draft,
             )
 
-        if route == Route.COURSE:
+        if decision.mode == "course" or route == Route.COURSE:
             if not self.sources:
                 refusal, follow_up = self.guard.missing_course_source()
                 return AgentResult(
-                    route=route,
+                    route=Route.COURSE,
                     source_status="missing_course_source",
-                    answer="Mình cần GitHub/PDF/link/text của khóa học trước khi trả lời câu này.",
-                    trace=["Read question", "Route = Course-grounded", "Course source missing"],
-                    tool_calls=[],
+                    answer=(
+                        "Mình chưa muốn đoán sai phần này, nên mình cần source khóa học trước đã.\n\n"
+                        "**Bạn có thể gửi một trong các nguồn sau:**\n"
+                        "- GitHub repo hoặc file\n"
+                        "- PDF hoặc slide link\n"
+                        "- Đoạn text từ README, rubric, hoặc slide"
+                    ),
+                    trace=["Read question", "Decision = course", "Course source missing"],
+                    tool_calls=self.decision_tool_calls(),
                     evidence=[],
                     refusal=refusal,
                     suggested_follow_up=follow_up,
+                    follow_up_options=[
+                        "Mình sẽ gửi GitHub repo",
+                        "Mình sẽ gửi PDF hoặc slide",
+                        "Mình sẽ paste đoạn text liên quan",
+                    ],
                 )
-            evidence = self.retrieve(question)
+            evidence = self.retrieve(resolved_question)
             if not evidence:
                 refusal, follow_up = self.guard.source_loaded_but_no_match()
                 return AgentResult(
-                    route=route,
+                    route=Route.COURSE,
                     source_status="source_loaded_but_no_match",
-                    answer="Mình có source khóa học nhưng chưa tìm thấy đoạn liên quan đến câu hỏi.",
-                    trace=["Read question", "Route = Course-grounded", "Retrieve course chunks", "No relevant chunk"],
-                    tool_calls=["course_retriever"],
+                    answer=(
+                        "Mình đã có source, nhưng chưa tìm thấy đoạn đủ khớp với câu hỏi hiện tại.\n\n"
+                        "**Bạn thử làm rõ thêm theo một trong các cách này nhé:**\n"
+                        "- nói rõ Day05 hay Day06\n"
+                        "- nói rõ slide, lab hoặc rubric nào\n"
+                        "- paste đúng đoạn text liên quan"
+                    ),
+                    trace=["Read question", "Decision = course", "Retrieve course chunks", "No relevant chunk"],
+                    tool_calls=self.decision_tool_calls() + ["course_retriever"],
                     evidence=[],
                     refusal=refusal,
                     suggested_follow_up=follow_up,
+                    follow_up_options=[
+                        "Đây là Day05",
+                        "Đây là Day06",
+                        "Mình sẽ paste đúng đoạn text",
+                    ],
                 )
-            answer = self.compose_course_answer(question, evidence)
+            answer = self.compose_course_answer(resolved_question, evidence)
             return AgentResult(
-                route=route,
+                route=Route.COURSE,
                 source_status="found_course_source",
                 answer=answer,
-                trace=["Read question", "Route = Course-grounded", "Retrieve course chunks", "Compose source-grounded answer"],
-                tool_calls=["retriever_agent", self.composer.call_label()],
+                trace=["Read question", "Decision = course", "Retrieve course chunks", "Compose source-grounded answer"],
+                tool_calls=self.decision_tool_calls() + ["retriever_agent", self.composer.call_label()],
                 evidence=[chunk.__dict__ for chunk in evidence],
             )
 
-        results = tavily_search(question)
-        answer = self.compose_general_answer(question, results)
+        search_seed = self.search_seed(question, active_conversation)
+        query_plan = self.query_planner.plan(search_seed)
+        if decision.mode == "general_model" or not query_plan.search_queries:
+            answer = self.compose_general_answer_from_model(resolved_question, query_plan)
+            return AgentResult(
+                route=Route.GENERAL,
+                source_status="model_knowledge_only",
+                answer=answer,
+                trace=[
+                    "Read question",
+                    f"Decision = {decision.mode}",
+                    "Use model knowledge first",
+                    "Skip search because question is basic or conversational",
+                ],
+                tool_calls=self.decision_tool_calls() + [self.composer.call_label()],
+                evidence=[],
+            )
+        results = tavily_multi_search(query_plan.search_queries)
+        answer = self.compose_general_answer(resolved_question, results, query_plan)
+        tool_calls = self.decision_tool_calls()
+        settings = self.query_planner.llm.settings
+        if settings.provider != "mock":
+            tool_calls.append(self.query_planner.call_label())
+        tool_calls.append(f"tavily_multi_search({query_plan.search_queries})")
+        tool_calls.append(self.composer.call_label())
         return AgentResult(
-            route=route,
+            route=Route.GENERAL,
             source_status="public_source_found",
             answer=answer,
-            trace=["Read question", "Route = General learning", "Call Tavily search", "Synthesize reasoning"],
-            tool_calls=[f"tavily_search_tool({question})", self.composer.call_label()],
+            trace=[
+                "Read question",
+                f"Decision = {decision.mode}",
+                "Expand question into multi-query search plan",
+                "Search across public domains",
+                "Synthesize grounded answer",
+            ],
+            tool_calls=tool_calls,
             evidence=results,
         )
+
+    def route_from_decision(self, mode: str, fallback_route: str) -> Route:
+        mapping = {
+            "small_talk": Route.GENERAL,
+            "clarify": Route.AMBIGUOUS,
+            "ops": Route.OPS,
+            "course": Route.COURSE,
+            "general_model": Route.GENERAL,
+            "general_search": Route.GENERAL,
+        }
+        if mode in mapping:
+            return mapping[mode]
+        try:
+            return Route(fallback_route)
+        except Exception:
+            return Route.GENERAL
+
+    def decision_tool_calls(self) -> list[str]:
+        settings = self.decision_agent.llm.settings
+        if settings.provider == "mock":
+            return []
+        return [self.decision_agent.call_label()]
+
+    def resolve_question(self, question: str, conversation: list[dict[str, str]]) -> str:
+        text = normalize(question)
+        if not self.is_follow_up(text):
+            return question
+
+        previous_topic = self.find_previous_user_topic(conversation)
+        if not previous_topic:
+            return question
+
+        return (
+            f"Chủ đề đang nói tới: {previous_topic}\n"
+            f"Người dùng muốn bạn giải thích sâu hơn hoặc cụ thể hơn về đúng chủ đề này.\n"
+            f"Câu follow-up hiện tại: {question}"
+        )
+
+    def is_follow_up(self, text: str) -> bool:
+        follow_up_markers = [
+            "chi tiết hơn",
+            "nói rõ hơn",
+            "giải thích thêm",
+            "cụ thể hơn",
+            "ví dụ đi",
+            "thêm ví dụ",
+            "ý là sao",
+            "là gì vậy",
+            "mình chưa hiểu",
+            "chưa hiểu",
+            "trong đây bạn vừa nói",
+            "bạn vừa nói",
+            "chi tiết về nó",
+        ]
+        plain = normalize_plain(text)
+        return any(marker in text for marker in follow_up_markers) or any(
+            normalize_plain(marker) in plain for marker in follow_up_markers
+        )
+
+    def is_small_talk(self, question: str) -> bool:
+        plain = normalize_plain(question)
+        short_greetings = ["hello", "hi", "helo", "xin chao", "chao", "cam on"]
+        if len(plain) <= 20 and any(plain == marker or plain.startswith(marker + " ") for marker in short_greetings):
+            return True
+        exact_intros = ["ban la ai", "ban lam duoc gi", "giup duoc gi"]
+        return any(marker in plain for marker in exact_intros) and len(plain) <= 40
+
+    def answer_small_talk(self, question: str) -> str:
+        text = normalize(question)
+        if "cảm ơn" in text or "cam on" in text:
+            return "Không có gì, mình ở đây để giúp bạn học nhanh hơn và đỡ phải mò tài liệu một mình."
+        if "bạn là ai" in text or "ban la ai" in text:
+            return (
+                "Mình là Learning OS Agent. Mình hỗ trợ bạn theo hai kiểu chính:\n\n"
+                "- giải thích kiến thức chung bằng ngôn ngữ dễ hiểu\n"
+                "- đọc repo, PDF hoặc tài liệu khóa học để trả lời bám đúng source\n\n"
+                "Nếu bạn muốn, cứ hỏi một khái niệm hoặc gửi source luôn là mình xử lý tiếp."
+            )
+        if "bạn làm được gì" in text or "ban lam duoc gi" in text or "giúp được gì" in text or "giup duoc gi" in text:
+            return (
+                "Mình có thể giúp bạn giải thích khái niệm, tóm tắt tài liệu, đọc repo hoặc PDF, và chỉ ra phần nào còn thiếu source trước khi trả lời chắc."
+            )
+        return "Chào bạn, mình sẵn sàng hỗ trợ. Bạn có thể hỏi kiến thức chung hoặc gửi repo/PDF để mình đọc cùng."
+
+    def is_under_specified(self, question: str) -> bool:
+        text = normalize(question)
+        plain = normalize_plain(question)
+        if self.is_follow_up(text):
+            return False
+        if len(text) > 40:
+            return False
+        vague_markers = [
+            "bài này",
+            "cái này",
+            "cái đó",
+            "làm sao",
+            "sao nhỉ",
+            "thế nào",
+            "được không",
+            "nên làm gì",
+        ]
+        return any(marker in text for marker in vague_markers) or any(
+            normalize_plain(marker) in plain for marker in vague_markers
+        )
+
+    def search_seed(self, question: str, conversation: list[dict[str, str]]) -> str:
+        text = normalize(question)
+        if self.is_follow_up(text):
+            previous_topic = self.find_previous_user_topic(conversation)
+            if previous_topic:
+                return previous_topic
+        return question
+
+    def find_previous_user_topic(self, conversation: list[dict[str, str]]) -> str:
+        for message in reversed(conversation):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content", "").strip()
+            if content and not self.is_follow_up(normalize(content)):
+                return content
+        return ""
 
     def compose_course_answer(self, question: str, evidence: list[Chunk]) -> str:
         llm_answer = self.composer.compose(
@@ -227,9 +440,16 @@ class LearningOSAgent:
                 }
                 for chunk in evidence
             ],
+            context={
+                "source_status": "found_course_source",
+                "answer_intent": "course_explain",
+            },
         )
         if llm_answer:
-            return llm_answer
+            return self.attach_sources(llm_answer, [
+                {"title": chunk.title, "url": chunk.source_url}
+                for chunk in evidence
+            ])
 
         text = normalize(question)
         if has_any(text, ["build slice", "slice"]):
@@ -252,19 +472,106 @@ class LearningOSAgent:
             f"Evidence: {citations}"
         )
 
-    def compose_general_answer(self, question: str, results: list[dict[str, str]]) -> str:
-        llm_answer = self.composer.compose(route="General learning", question=question, evidence=results)
+    def compose_general_answer(self, question: str, results: list[dict[str, str]], query_plan: QueryPlan) -> str:
+        llm_answer = self.composer.compose(
+            route="General learning",
+            question=question,
+            evidence=results,
+            context={
+                "source_status": "public_source_found",
+                "query_plan": {
+                    "topic": query_plan.topic,
+                    "search_queries": query_plan.search_queries,
+                    "answer_intent": query_plan.answer_intent,
+                },
+            },
+        )
         if llm_answer:
-            return llm_answer
+            return self.attach_sources(llm_answer, results)
 
         text = normalize(question)
         if has_any(text, ["build slice", "slice"]):
             return (
-                "Build slice là một phần nhỏ của sản phẩm được chọn để học nhanh từ user thật.\n\n"
-                "Reasoning: thay vì build cả hệ thống, product team chọn một lát cắt end-to-end để kiểm chứng user, task, decision và output.\n"
-                "Gợi ý áp dụng: với Learning OS, slice nhỏ là một câu hỏi học tập đi qua route -> search/source check -> answer/refusal."
+                "Build slice là một phần nhỏ nhưng hoàn chỉnh của sản phẩm, đủ để mình đem đi test với user thật.\n\n"
+                "**Điểm chính**\n"
+                "- Nó không phải bản thu nhỏ ngẫu nhiên, mà là một flow end-to-end.\n"
+                "- Một build slice tốt thường có: một user, một task, một AI decision và một output nhìn thấy được.\n"
+                "- Mục tiêu là học nhanh xem flow đó có tạo giá trị thật không.\n\n"
+                "**Bạn có thể áp dụng ngay**\n"
+                "1. Chọn một câu hỏi học tập cụ thể.\n"
+                "2. Cho agent route câu hỏi, tìm source, rồi trả lời hoặc từ chối.\n"
+                "3. Test happy path và một path thiếu context."
             )
         first = results[0]["snippet"] if results else "Không có kết quả public đủ rõ."
-        return f"Đây là câu hỏi kiến thức chung nên mình dùng public search trước.\n\nReasoning summary: {first}"
+        return (
+            f"{query_plan.topic} là chủ đề mình đang bám vào để trả lời.\n\n"
+            "**Điểm chính**\n"
+            f"- {first}\n"
+            f"- Mình đã mở rộng câu hỏi theo các hướng: {', '.join(query_plan.search_queries[:3])}.\n"
+            "- Nếu bạn muốn, mình có thể giải thích tiếp theo hướng định nghĩa, cách hoạt động, ví dụ hoặc so sánh.\n\n"
+            "**Nguồn tham khảo**\n"
+            + "\n".join(
+                f"- [{item.get('title', 'Nguồn tham khảo')}]({item.get('url', '')})"
+                for item in results[:3]
+                if item.get("url")
+            )
+        ).strip()
+
+    def compose_general_answer_from_model(self, question: str, query_plan: QueryPlan) -> str:
+        llm_answer = self.composer.compose(
+            route="General learning",
+            question=question,
+            evidence=[],
+            context={
+                "source_status": "model_knowledge_only",
+                "use_model_knowledge": True,
+                "query_plan": {
+                    "topic": query_plan.topic,
+                    "search_queries": [],
+                    "answer_intent": query_plan.answer_intent,
+                },
+            },
+        )
+        if llm_answer:
+            return llm_answer
+
+        return (
+            f"{query_plan.topic} là phần mình có thể giải thích trực tiếp bằng kiến thức sẵn của model.\n\n"
+            "**Điểm chính**\n"
+            "- Đây là câu hỏi cơ bản nên chưa cần đi search ngay.\n"
+            "- Nếu bạn muốn, mình có thể giải thích sâu hơn, cho ví dụ hoặc so sánh với khái niệm gần nó.\n"
+        )
+
+    def attach_sources(self, answer: str, evidence: list[dict[str, Any]]) -> str:
+        cleaned = self.strip_generated_sources(answer)
+        lines = [cleaned.strip()]
+        source_lines = self.build_source_lines(evidence)
+        if source_lines:
+            lines.append("**Nguồn tham khảo**")
+            lines.extend(source_lines)
+        return "\n\n".join(part for part in ["\n".join(lines[:1]), "\n".join(lines[1:])] if part).strip()
+
+    def strip_generated_sources(self, answer: str) -> str:
+        marker = "\n**Nguồn tham khảo**"
+        if marker in answer:
+            return answer.split(marker, 1)[0].strip()
+        marker_plain = "\nSources:"
+        if marker_plain in answer:
+            return answer.split(marker_plain, 1)[0].strip()
+        return answer.strip()
+
+    def build_source_lines(self, evidence: list[dict[str, Any]]) -> list[str]:
+        lines: list[str] = []
+        seen: set[str] = set()
+        for item in evidence:
+            url = str(item.get("url", "")).strip()
+            title = str(item.get("title", "")).strip() or "Nguồn tham khảo"
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            lines.append(f"- [{title}]({url})")
+            if len(lines) >= 4:
+                break
+        return lines
 
 __all__ = ["LearningOSAgent", "AgentResult", "Source", "Chunk"]

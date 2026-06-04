@@ -1,60 +1,25 @@
-const routePill = document.querySelector("#routePill");
-const chatWindow = document.querySelector("#chatWindow");
-const questionInput = document.querySelector("#questionInput");
-const sourceInput = document.querySelector("#sourceInput");
-const sendBtn = document.querySelector("#sendBtn");
-const resetBtn = document.querySelector("#resetBtn");
-const loadSourceBtn = document.querySelector("#loadSourceBtn");
-const sampleTextBtn = document.querySelector("#sampleTextBtn");
-const sampleGitBtn = document.querySelector("#sampleGitBtn");
-const samplePdfBtn = document.querySelector("#samplePdfBtn");
-const sampleGeneralBtn = document.querySelector("#sampleGeneralBtn");
-const sampleCourseBtn = document.querySelector("#sampleCourseBtn");
-const sampleAmbiguousBtn = document.querySelector("#sampleAmbiguousBtn");
-const sampleOpsBtn = document.querySelector("#sampleOpsBtn");
-const traceList = document.querySelector("#traceList");
-const toolList = document.querySelector("#toolList");
-const sourceList = document.querySelector("#sourceList");
-const evidenceList = document.querySelector("#evidenceList");
-const answerContract = document.querySelector("#answerContract");
-const refusalBox = document.querySelector("#refusalBox");
+const STORAGE_KEY = "learning_os_agent_chats";
+const ACTIVE_KEY = "learning_os_agent_active_chat";
+const THEME_KEY = "learning_os_agent_theme";
 
-const adapters = {
-  async tavilySearch(query) {
-    if (canUseBackend()) {
-      const response = await apiPost("/api/tools/tavily", { query });
-      return response.evidence || [];
-    }
-    if (window.learningAgentAdapters?.tavilySearch) {
-      return window.learningAgentAdapters.tavilySearch(query);
-    }
-    return mockTavilySearch(query);
-  },
-  async readGitHub(url) {
-    if (window.learningAgentAdapters?.readGitHub) {
-      return window.learningAgentAdapters.readGitHub(url);
-    }
-    return {
-      status: "adapter_missing",
-      title: "GitHub reader chưa được cắm",
-      text:
-        "GitHub source detected. Tool GitHub reader cần list README/docs/rubric/notebook markdown, sau đó trả text chunks cho agent.",
-      note: "Stub đang chờ tool của teammate."
-    };
-  },
-  async readPdf(url) {
-    if (window.learningAgentAdapters?.readPdf) {
-      return window.learningAgentAdapters.readPdf(url);
-    }
-    return {
-      status: "adapter_missing",
-      title: "PDF reader chưa được cắm",
-      text:
-        "PDF source detected. Tool PDF reader cần extract text theo page, chunk theo section, và báo OCR-needed nếu PDF là scan.",
-      note: "Stub đang chờ tool của teammate."
-    };
-  }
-};
+const chatCard = document.querySelector(".chat-card");
+const form = document.querySelector("#chatForm");
+const input = document.querySelector("#chatInput");
+const messages = document.querySelector("#messages");
+const attachButton = document.querySelector("#attachButton");
+const fileInput = document.querySelector("#fileInput");
+const fileList = document.querySelector("#fileList");
+const menuButton = document.querySelector("#menuButton");
+const closeDrawer = document.querySelector("#closeDrawer");
+const drawerBackdrop = document.querySelector("#drawerBackdrop");
+const newChatButton = document.querySelector("#newChatButton");
+const headerNewChatButton = document.querySelector("#headerNewChatButton");
+const historyList = document.querySelector("#historyList");
+const quickPrompts = document.querySelector("#quickPrompts");
+const themeToggle = document.querySelector("#themeToggle");
+
+let memoryStore = {};
+let selectedFiles = [];
 
 function canUseBackend() {
   return window.location.protocol === "http:" || window.location.protocol === "https:";
@@ -64,7 +29,7 @@ async function apiPost(path, payload) {
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
   if (!response.ok) {
     throw new Error(`API ${path} failed: ${response.status}`);
@@ -72,727 +37,871 @@ async function apiPost(path, payload) {
   return response.json();
 }
 
-const samples = {
-  text:
-    "Day05 thin SPEC: Evidence là nhóm thấy pain thật ở đâu, nguồn nào, quote/screenshot nào. Build slice là một user, một task, một AI decision, một output. 4 paths gồm happy, low-confidence, failure, correction. Day05 không cần PRD đầy đủ, chỉ cần SPEC đủ để build.",
-  github: "https://github.com/VinUni-AI20k/Batch02-Day05-AI-Product-Labs",
-  pdf: "https://example.com/ai-in-action-day05-slides.pdf",
-  general: "Build slice là gì trong product management?",
-  course: "Trong slide Day05, build slice là gì?",
-  ambiguous: "Bài này làm sao?",
-  ops: "Deadline nộp repo là mấy giờ?"
-};
-
-const state = {
-  messages: [],
-  sources: [],
-  memory: {
-    lastRoute: "ready",
-    missingInfo: [],
-    corrections: []
-  },
-  lastRun: {
-    trace: [],
-    tools: [],
-    evidence: [],
-    contract: "",
-    refusal: ""
+// Helper functions for state
+function storageGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (error) {
+    return memoryStore[key] || null;
   }
-};
-
-function hasAny(text, words) {
-  return words.some((word) => text.includes(word));
 }
 
-function normalizeText(text) {
-  return text.toLowerCase().normalize("NFC");
-}
-
-function detectSourceType(raw) {
-  const text = raw.trim().toLowerCase();
-  if (!text) return "empty";
-  if (text.includes("github.com") && !text.includes("/blob/") && !text.includes("/raw/")) return "github_repo";
-  if (text.includes("github.com") && text.includes("/blob/")) return "github_file";
-  if (text.endsWith(".pdf") || text.includes(".pdf?")) return "pdf";
-  if (text.startsWith("http://") || text.startsWith("https://")) return "web";
-  return "pasted_text";
-}
-
-function detectRoute(question) {
-  const text = normalizeText(question);
-
-  if (hasAny(text, ["deadline", "hạn nộp", "nộp repo", "repo cá nhân", "repo nhóm", "grading", "điểm", "lịch", "mấy giờ"])) {
-    return "ops";
+function storageSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (error) {
+    memoryStore[key] = value;
   }
-
-  if (hasAny(text, ["bài này", "cái này", "làm sao", "không hiểu", "nó là gì"]) && !hasAny(text, ["slide", "day05", "day06", "lab", "rubric"])) {
-    return "ambiguous";
-  }
-
-  if (hasAny(text, ["trong slide", "theo slide", "day05", "day06", "lab", "rubric", "bài lab", "khóa học", "ai thực chiến", "thầy nói", "mentor nói", "repo bài"])) {
-    return "course";
-  }
-
-  return "general";
 }
 
-function sourceIsCourse(source) {
-  return ["pasted_text", "github_repo", "github_file", "pdf", "web"].includes(source.type);
+function createId() {
+  return "chat-" + Date.now() + "-" + Math.random().toString(16).slice(2);
 }
 
-function chunkText(text, meta) {
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  if (!cleaned) return [];
-  const chunks = [];
-  for (let index = 0; index < cleaned.length; index += 520) {
-    chunks.push({
-      id: `${meta.id}-chunk-${chunks.length + 1}`,
-      text: cleaned.slice(index, index + 520),
-      meta: { ...meta, chunk_id: chunks.length + 1 }
+function createConversation(title) {
+  return {
+    id: createId(),
+    title: title || "Đoạn chat mới",
+    createdAt: new Date().toISOString(),
+    messages: [],
+  };
+}
+
+function normalizeConversation(chat) {
+  return {
+    id: chat && chat.id ? String(chat.id) : createId(),
+    title: chat && chat.title ? String(chat.title) : "Đoạn chat mới",
+    createdAt: chat && chat.createdAt ? chat.createdAt : new Date().toISOString(),
+    messages: Array.isArray(chat && chat.messages) ? chat.messages : [],
+  };
+}
+
+function loadConversations() {
+  try {
+    const saved = JSON.parse(storageGet(STORAGE_KEY) || "[]");
+    if (Array.isArray(saved) && saved.length) {
+      return saved.map(normalizeConversation);
+    }
+  } catch (error) {
+    return [createConversation()];
+  }
+  return [createConversation()];
+}
+
+let conversations = loadConversations();
+let activeId = storageGet(ACTIVE_KEY);
+
+if (!activeId || !conversations.some((chat) => chat.id === activeId)) {
+  activeId = conversations[0].id;
+}
+
+function saveState() {
+  storageSet(STORAGE_KEY, JSON.stringify(conversations));
+  storageSet(ACTIVE_KEY, activeId);
+}
+
+function getActiveConversation() {
+  return conversations.find((chat) => chat.id === activeId) || conversations[0];
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function formatDate(value) {
+  try {
+    return new Intl.DateTimeFormat("vi-VN", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch (error) {
+    return "Gần đây";
+  }
+}
+
+function scrollToBottom() {
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function setDrawer(open) {
+  chatCard.classList.toggle("drawer-open", open);
+}
+
+/* ==========================================================================
+   THEME MANAGEMENT
+   ========================================================================== */
+function initTheme() {
+  const savedTheme = storageGet(THEME_KEY);
+  const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  
+  if (savedTheme === "dark" || (!savedTheme && systemPrefersDark)) {
+    document.body.classList.add("dark-theme");
+  } else {
+    document.body.classList.remove("dark-theme");
+  }
+}
+
+if (themeToggle) {
+  themeToggle.addEventListener("click", () => {
+    document.body.classList.toggle("dark-theme");
+    const isDark = document.body.classList.contains("dark-theme");
+    storageSet(THEME_KEY, isDark ? "dark" : "light");
+  });
+}
+
+/* ==========================================================================
+   MARKDOWN PARSER
+   ========================================================================== */
+function parseMarkdown(text) {
+  const blocks = [];
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)\n?```/g;
+  let lastIndex = 0;
+  let match;
+  
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      blocks.push({
+        type: 'text',
+        content: text.slice(lastIndex, match.index)
+      });
+    }
+    blocks.push({
+      type: 'code',
+      lang: match[1] || 'code',
+      content: match[2]
+    });
+    lastIndex = codeBlockRegex.lastIndex;
+  }
+  
+  if (lastIndex < text.length) {
+    blocks.push({
+      type: 'text',
+      content: text.slice(lastIndex)
     });
   }
-  return chunks;
+  
+  if (blocks.length === 0) {
+    blocks.push({ type: 'text', content: text });
+  }
+  
+  return blocks.map(block => {
+    if (block.type === 'code') {
+      const escapedCode = escapeHtml(block.content);
+      const language = block.lang || 'code';
+      return `<div class="code-block-container">
+        <div class="code-header">
+          <span class="code-lang">${escapeHtml(language)}</span>
+          <button class="code-copy-btn" type="button" onclick="copyCodeText(this)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span>Sao chép</span>
+          </button>
+        </div>
+        <pre><code>${escapedCode}</code></pre>
+      </div>`;
+    } else {
+      let content = escapeHtml(block.content);
+      
+      // Bold: **text**
+      content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      
+      // Italic: *text*
+      content = content.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      
+      // Inline code: `code`
+      content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
+      
+      // Blockquotes: > text
+      content = content.replace(/^&gt;\s+(.*)$/gm, '<blockquote>$1</blockquote>');
+      
+      // Lists (unordered)
+      const lines = content.split('\n');
+      let inList = false;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line.startsWith('- ') || line.startsWith('* ')) {
+          const itemContent = line.slice(2);
+          lines[i] = (inList ? '' : '<ul>') + `<li>${itemContent}</li>`;
+          inList = true;
+        } else {
+          if (inList) {
+            lines[i] = '</ul>' + lines[i];
+            inList = false;
+          }
+        }
+      }
+      if (inList) {
+        lines.push('</ul>');
+      }
+      content = lines.join('\n');
+      
+      // Convert newlines to br
+      content = content.replace(/\n/g, '<br>');
+      content = content.replace(/<\/blockquote><br>/g, '</blockquote>');
+      content = content.replace(/<\/ul><br>/g, '</ul>');
+      content = content.replace(/<ul><br>/g, '<ul>');
+      
+      return `<div class="text-block">${content}</div>`;
+    }
+  }).join('');
 }
 
-function keywordsFor(question) {
-  const text = normalizeText(question);
-  const groups = [
-    ["build slice", "slice", "lát cắt"],
-    ["thin spec", "spec"],
-    ["failure path", "failure"],
-    ["happy path", "happy"],
-    ["low-confidence", "low confidence", "không chắc"],
-    ["evidence", "evidence pack"],
-    ["rag", "retrieval"],
-    ["agentic", "workflow", "agent"],
-    ["rubric", "checklist"]
-  ];
-  const matched = groups.flatMap((group) => group.filter((word) => text.includes(word)));
-  if (matched.length) return matched;
-  return text.split(/\s+/).filter((word) => word.length > 3).slice(0, 8);
+/* ==========================================================================
+   RENDER FUNCTIONS
+   ========================================================================== */
+function renderEmptyState() {
+  messages.innerHTML = `
+    <section class="empty-state">
+      <div class="empty-state-logo">LO</div>
+      <h2>Hôm nay bạn muốn học gì?</h2>
+      <p>Hỏi về bài học, lab, rubric, khái niệm hoặc thêm tệp bằng nút đính kèm để chuẩn bị cho phần phân tích tài liệu sau này.</p>
+    </section>
+  `;
 }
 
-function retrieveFromSources(question) {
-  const keywords = keywordsFor(question);
-  const chunks = state.sources.flatMap((source) => source.chunks);
+function messageTemplate(role, content, index) {
+  if (typeof role === "object" && role !== null) {
+    const message = role;
+    const renderedContent = parseMarkdown(message.content || "");
+    const followUps = Array.isArray(message.actions) && message.actions.length
+      ? `<div class="follow-up-actions">${message.actions.map((action, i) => `<button type="button" data-action-index="${i}" data-message-id="${escapeHtml(message.id)}">${escapeHtml(action.label)}</button>`).join("")}</div>`
+      : "";
+    if (message.role === "agent") {
+      return `
+        <article class="message agent" data-message-id="${escapeHtml(message.id || "")}">
+          <div class="avatar" aria-hidden="true">LO</div>
+          <div class="bubble">
+            <div class="bubble-content">${renderedContent}</div>
+            ${followUps}
+            <div class="message-actions" aria-label="Hành động tin nhắn">
+              <button type="button" class="action-btn like-btn" onclick="toggleLikeMessage(this)" aria-label="Thích tin nhắn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+                <span>Thích</span>
+              </button>
+              <div class="copy-tooltip-wrapper">
+                <button type="button" class="action-btn copy-btn" onclick="copyMessageText(this, ${index})" aria-label="Sao chép tin nhắn">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Sao chép</span>
+                </button>
+              </div>
+              <button type="button" class="action-btn retry-btn" onclick="regenerateMessage(${index})" aria-label="Tạo lại câu trả lời">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                <span>Tạo lại</span>
+              </button>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+    const safeContent = escapeHtml(message.content || "").replace(/\n/g, "<br>");
+    return `
+      <article class="message user" data-message-id="${escapeHtml(message.id || "")}">
+        <div class="bubble">
+          <div class="bubble-content"><p>${safeContent}</p></div>
+        </div>
+      </article>
+    `;
+  }
 
-  return chunks
-    .map((chunk) => {
-      const body = normalizeText(chunk.text);
-      const score = keywords.reduce((total, keyword) => total + (body.includes(keyword) ? 1 : 0), 0);
-      return { ...chunk, score };
+  if (role === "agent") {
+      const formattedContent = parseMarkdown(content);
+      return `
+        <article class="message agent">
+          <div class="avatar" aria-hidden="true">LO</div>
+          <div class="bubble">
+            <div class="bubble-content">${formattedContent}</div>
+          <div class="message-actions" aria-label="Hành động tin nhắn">
+            <button type="button" class="action-btn like-btn" onclick="toggleLikeMessage(this)" aria-label="Thích tin nhắn">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+              <span>Thích</span>
+            </button>
+            <div class="copy-tooltip-wrapper">
+              <button type="button" class="action-btn copy-btn" onclick="copyMessageText(this, ${index})" aria-label="Sao chép tin nhắn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                <span>Sao chép</span>
+              </button>
+            </div>
+            <button type="button" class="action-btn retry-btn" onclick="regenerateMessage(${index})" aria-label="Tạo lại câu trả lời">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+              <span>Tạo lại</span>
+            </button>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  const safeContent = escapeHtml(content).replace(/\n/g, '<br>');
+  return `
+    <article class="message user">
+      <div class="bubble">
+        <div class="bubble-content"><p>${safeContent}</p></div>
+      </div>
+    </article>
+  `;
+}
+
+function renderMessages() {
+  const chat = getActiveConversation();
+
+  if (!chat || !chat.messages.length) {
+    renderEmptyState();
+    quickPrompts.classList.remove("hidden");
+    return;
+  }
+
+  quickPrompts.classList.add("hidden");
+  messages.innerHTML = chat.messages
+    .map((message, index) => messageTemplate(message, null, index))
+    .join("");
+  scrollToBottom();
+}
+
+function renderHistory() {
+  historyList.innerHTML = conversations
+    .map((chat) => {
+      const active = chat.id === activeId ? " active" : "";
+      const escapedId = escapeHtml(chat.id);
+      return `
+        <div class="history-item${active}" data-chat-id="${escapedId}" onclick="switchChat('${escapedId}')">
+          <div class="history-item-content">
+            <strong>${escapeHtml(chat.title)}</strong>
+            <span>${formatDate(chat.createdAt)}</span>
+          </div>
+          <div class="history-actions">
+            <button class="history-btn edit-btn" onclick="renameChat(event, '${escapedId}')" title="Đổi tên" type="button" aria-label="Sửa tên">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+            </button>
+            <button class="history-btn delete-btn" onclick="deleteChat(event, '${escapedId}')" title="Xóa chat" type="button" aria-label="Xóa chat">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+            </button>
+          </div>
+        </div>
+      `;
     })
-    .filter((chunk) => chunk.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 4);
+    .join("");
 }
 
-function renderList(container, items) {
-  container.innerHTML = "";
-  items.forEach((item) => {
-    const li = document.createElement("li");
-    li.textContent = item;
-    container.appendChild(li);
+/* ==========================================================================
+   GLOBAL EVENT & UTILITY HANDLERS (ATTACHED TO WINDOW)
+   ========================================================================== */
+window.switchChat = function(chatId) {
+  activeId = chatId;
+  saveState();
+  renderMessages();
+  renderHistory();
+  setDrawer(false);
+};
+
+window.deleteChat = function(event, chatId) {
+  event.stopPropagation();
+  
+  if (conversations.length <= 1 && conversations[0].messages.length === 0) {
+    alert("Không thể xóa đoạn chat duy nhất!");
+    return;
+  }
+  
+  if (!confirm("Bạn có chắc chắn muốn xóa cuộc trò chuyện này?")) return;
+  
+  conversations = conversations.filter((c) => c.id !== chatId);
+  
+  if (conversations.length === 0) {
+    conversations = [createConversation()];
+  }
+  
+  if (activeId === chatId) {
+    activeId = conversations[0].id;
+  }
+  
+  saveState();
+  renderMessages();
+  renderHistory();
+};
+
+window.renameChat = function(event, chatId) {
+  event.stopPropagation();
+  const chat = conversations.find((c) => c.id === chatId);
+  if (!chat) return;
+  
+  const newTitle = prompt("Nhập tiêu đề mới cho đoạn chat:", chat.title);
+  if (newTitle === null) return;
+  
+  const trimmed = newTitle.trim();
+  chat.title = trimmed || "Đoạn chat mới";
+  saveState();
+  renderHistory();
+};
+
+window.toggleLikeMessage = function(button) {
+  button.classList.toggle("active");
+  const isLiked = button.classList.contains("active");
+  const span = button.querySelector("span");
+  span.textContent = isLiked ? "Đã thích" : "Thích";
+};
+
+window.copyMessageText = function(button, index) {
+  const chat = getActiveConversation();
+  const msg = chat.messages[index];
+  if (!msg) return;
+  
+  navigator.clipboard.writeText(msg.content).then(() => {
+    let tooltip = button.closest(".copy-tooltip-wrapper").querySelector(".copy-success-tooltip");
+    if (!tooltip) {
+      tooltip = document.createElement("span");
+      tooltip.className = "copy-success-tooltip";
+      tooltip.textContent = "Đã sao chép!";
+      button.closest(".copy-tooltip-wrapper").appendChild(tooltip);
+    }
+    
+    // Force reflow
+    tooltip.getBoundingClientRect();
+    tooltip.classList.add("show");
+    
+    setTimeout(() => {
+      tooltip.classList.remove("show");
+    }, 1800);
+  }).catch(err => {
+    console.error("Lỗi khi sao chép:", err);
   });
+};
+
+window.copyCodeText = function(button) {
+  const container = button.closest(".code-block-container");
+  const code = container.querySelector("code");
+  const text = code.innerText;
+  
+  navigator.clipboard.writeText(text).then(() => {
+    const span = button.querySelector("span");
+    const originalText = span.textContent;
+    span.textContent = "Đã chép!";
+    button.style.color = "var(--success-color)";
+    
+    setTimeout(() => {
+      span.textContent = originalText;
+      button.style.color = "";
+    }, 1800);
+  }).catch(err => {
+    console.error("Lỗi khi sao chép mã code:", err);
+  });
+};
+
+window.regenerateMessage = function(index) {
+  const chat = getActiveConversation();
+  // Find the user prompt before this agent response
+  let userQuestion = "";
+  for (let i = index - 1; i >= 0; i--) {
+    if (chat.messages[i].role === "user") {
+      userQuestion = chat.messages[i].content;
+      break;
+    }
+  }
+  
+  // Remove all messages from index onwards (including this reply)
+  chat.messages.splice(index);
+  saveState();
+  renderMessages();
+  
+  const targetQuestion = userQuestion || "Tải tài liệu mới";
+
+  showTypingIndicator();
+  processQuestion(targetQuestion)
+    .finally(() => hideTypingIndicator());
+};
+
+/* ==========================================================================
+   STATE MUTATION HELPERS
+   ========================================================================== */
+function addMessage(role, content, actions = []) {
+  const chat = getActiveConversation();
+  chat.messages.push({ id: createId(), role, content, actions });
+
+  if (role === "user" && (chat.title === "Đoạn chat mới" || chat.title === "Doan chat moi")) {
+    // Generate clean smart title from first 30 chars
+    const cleanContent = content.split('\n')[0].replace(/\s+/g, " ").trim();
+    chat.title = cleanContent.slice(0, 30) + (cleanContent.length > 30 ? "..." : "") || "Đoạn chat mới";
+  }
+
+  // Put active chat first in the list
+  conversations = [chat].concat(conversations.filter((item) => item.id !== chat.id));
+  activeId = chat.id;
+
+  saveState();
+  renderMessages();
+  renderHistory();
 }
 
-function pushMessage(role, text, actions = []) {
-  state.messages.push({ role, text, actions });
-  renderChat();
+function buildFallbackReply(question) {
+  const normalized = question.toLowerCase();
+
+  if (normalized.includes("deadline") || normalized.includes("nop") || normalized.includes("repo") || normalized.includes("nộp")) {
+    return `**Thông báo về Deadline & Quy định nộp bài:**
+
+> Hiện tại phiên bản thử nghiệm **chưa có kết nối chính thức** tới nguồn dữ liệu của bạn để trích xuất deadline chính xác. 
+
+Dưới đây là một số thông tin bạn có thể chuẩn bị sẵn:
+1. **Liên kết Git Repository**: Đảm bảo cấu trúc thư mục chứa các thư mục bài làm đúng định dạng \`Day05-...\`.
+2. **Commit & Push**: Hãy thường xuyên push code lên để lưu trữ.
+
+Khi backend được tích hợp đầy đủ, hệ thống sẽ tự động quét thông tin từ hệ thống học tập để trả lời chi tiết nhất.`;
+  }
+
+  if (normalized.includes("build slice") || normalized.includes("slice nghĩa là gì")) {
+    return `**Build Slice** trong phát triển phần mềm (đặc biệt là theo phương pháp Agile/Scrum) là việc xây dựng một **lát cắt dọc** (vertical slice) đầy đủ của tính năng.
+
+Ý nghĩa của một lát cắt dọc:
+- **Đầy đủ các tầng**: Đi từ giao diện người dùng (\`Frontend\`), xử lý trung gian (\`Backend\`), tới nơi lưu trữ dữ liệu (\`Database\`).
+- **Chạy thử được**: Khách hàng có thể trải nghiệm trực tiếp phần tính năng này thay vì chỉ nhìn giao diện mẫu.
+- **Tập trung và giảm thiểu rủi ro**: Giúp phát hiện sớm lỗi tích hợp giữa các tầng.
+
+Ví dụ một cấu trúc file Go đơn giản khi thiết lập lát cắt dọc cho API:
+\`\`\`go
+package slice
+
+import "fmt"
+
+// UserSlice định nghĩa cấu trúc dữ liệu người dùng tinh gọn
+type UserSlice struct {
+    ID    string \`json:"id"\`
+    Email string \`json:"email"\`
 }
 
-function renderChat() {
-  chatWindow.innerHTML = "";
-  state.messages.forEach((message) => {
-    const bubble = document.createElement("article");
-    bubble.className = `message ${message.role}`;
-    const body = document.createElement("div");
-    body.className = "message-body";
-    body.textContent = message.text;
-    bubble.appendChild(body);
+func GetUser(id string) (*UserSlice, error) {
+    if id == "" {
+        return nil, fmt.Errorf("ID không hợp lệ")
+    }
+    return &UserSlice{ID: id, Email: "tuananh@example.com"}, nil
+}
+\`\`\``;
+  }
 
-    if (message.actions?.length) {
-      const actionWrap = document.createElement("div");
-      actionWrap.className = "message-actions";
-      message.actions.forEach((action) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "option";
-        button.textContent = action.label;
-        button.addEventListener("click", () => action.handler());
-        actionWrap.appendChild(button);
+  if (normalized.includes("thin spec")) {
+    return `**Thin Spec** (Tài liệu đặc tả mỏng/tinh gọn) là một bản đặc tả tính năng tối giản, tập trung vào mô tả nhanh hành vi hệ thống mà không đi sâu vào chi tiết kỹ thuật phức tạp ngay từ đầu.
+
+Một bản **Thin Spec** chuẩn thường gồm các nội dung chính sau:
+1. **Mục tiêu tính năng (Goal)**: Tại sao lại làm tính năng này? Nó giải quyết vấn đề gì?
+2. **Phạm vi (Scope)**: Những gì thuộc và không thuộc tính năng ở phiên bản hiện tại.
+3. **Mô tả kịch bản (User Stories)**:
+   - Sử dụng cấu trúc: \`As a <role>, I want to <action> so that <benefit>\`.
+   - Định nghĩa rõ các trạng thái thành công và lỗi.
+4. **Tiêu chí nghiệm thu (Acceptance Criteria)**: Các điều kiện cụ thể để xác định tính năng hoàn thành.
+
+> **Mẹo**: Hãy giữ độ dài của Thin Spec trong vòng **1-2 trang** để tối ưu hóa thời gian đọc và phản hồi nhanh từ các thành viên trong đội ngũ phát triển.`;
+  }
+
+  if (normalized.includes("bai nay") || normalized.includes("lam sao") || normalized.includes("bắt đầu") || normalized.includes("bài này")) {
+    return `Để bắt đầu làm bài tập này, bạn hãy làm theo các bước tinh gọn sau:
+
+- **Bước 1**: Đọc kỹ yêu cầu đề bài và các tiêu chí đánh giá trong file đề bài.
+- **Bước 2**: Khởi tạo khung thư mục dự án của bạn (ví dụ: tạo cấu trúc file tĩnh \`index.html\`, \`styles.css\`, \`script.js\`).
+- **Bước 3**: Bắt đầu triển khai phần giao diện chính trước, tập trung vào cấu trúc ngữ nghĩa (Semantic HTML).
+- **Bước 4**: Thêm CSS để căn chỉnh bố cục trước khi xử lý tương tác JavaScript.
+
+Dưới đây là một ví dụ khung HTML cơ bản nhất để bắt đầu:
+\`\`\`html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Khung dự án</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app"></div>
+  <script src="script.js"></script>
+</body>
+</html>
+\`\`\``;
+  }
+
+  return `Cảm ơn bạn đã trò chuyện với **Learning OS Agent**. Đây là câu trả lời được xử lý giả lập tại Frontend.
+
+Khi có **Backend** kết nối đầy đủ, hệ thống sẽ thực hiện luồng xử lý tự động:
+1. **Trích xuất ý định (Intent Detection)**: Phân tích câu hỏi của bạn.
+2. **Tra cứu tài liệu (RAG - Retrieval)**: Quét cơ sở tri thức để tìm định nghĩa chính xác.
+3. **Tổng hợp câu trả lời (Synthesis)**: Tạo ra phản hồi hoàn chỉnh kèm trích dẫn nguồn uy tín.
+
+Bạn có thể thử chọn các nút gợi ý câu hỏi ở trên để xem các câu trả lời hiển thị Markdown phong phú hơn!`;
+}
+
+function resizeInput() {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 140) + "px";
+}
+
+function buildConversationPayload() {
+  const chat = getActiveConversation();
+  return chat.messages.map((message) => ({
+    role: message.role === "agent" ? "assistant" : message.role,
+    content: message.content,
+  }));
+}
+
+/* ==========================================================================
+   FILE ATTACHMENTS LOGIC
+   ========================================================================== */
+function getFileIcon(fileName) {
+  const ext = fileName.split('.').pop().toLowerCase();
+  switch(ext) {
+    case 'pdf': return '📕';
+    case 'doc':
+    case 'docx': return '📘';
+    case 'xls':
+    case 'xlsx': return '📗';
+    case 'ppt':
+    case 'pptx': return '📙';
+    case 'jpg':
+    case 'jpeg':
+    case 'png':
+    case 'gif': return '🖼️';
+    case 'js':
+    case 'ts':
+    case 'html':
+    case 'css':
+    case 'py':
+    case 'go':
+    case 'json': return '💻';
+    case 'zip':
+    case 'rar': return '📦';
+    default: return '📄';
+  }
+}
+
+async function loadSourceFromText(text, label) {
+  if (!canUseBackend()) {
+    addMessage("agent", `Mình đã nhận ${label}, nhưng backend chưa mở nên chưa thể nạp source thật.`);
+    return;
+  }
+  try {
+    const result = await apiPost("/api/source", { source: text });
+    addMessage("agent", `Mình đã nạp source từ ${label}: **${result.title}**.`);
+  } catch (error) {
+    addMessage("agent", `Mình chưa nạp được source từ ${label}.\n\n${error.message}`);
+  }
+}
+
+async function handleAttachedFiles(files) {
+  const supportedTextFiles = Array.from(files).filter((file) => {
+    const name = file.name.toLowerCase();
+    return name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".markdown");
+  });
+
+  for (const file of supportedTextFiles) {
+    const content = await file.text();
+    await loadSourceFromText(content, file.name);
+  }
+
+  const unsupported = Array.from(files).filter((file) => !supportedTextFiles.includes(file));
+  if (unsupported.length) {
+    addMessage("agent", "Hiện tại mình nạp tốt file text hoặc markdown. Link GitHub, PDF hoặc web link sẽ được hỗ trợ khi bạn paste trực tiếp vào chat.");
+  }
+}
+
+async function processQuestion(question) {
+  if (canUseBackend()) {
+    try {
+      const response = await apiPost("/api/ask", {
+        question,
+        conversation: buildConversationPayload(),
       });
-      bubble.appendChild(actionWrap);
+      const actions = Array.isArray(response.follow_up_options)
+        ? response.follow_up_options.map((option) => ({
+            label: option,
+            handler: () => {
+              input.value = option;
+              resizeInput();
+              form.requestSubmit();
+            },
+          }))
+        : [];
+      addMessage("agent", response.answer || "Mình chưa có câu trả lời phù hợp.", actions);
+      return;
+    } catch (error) {
+      addMessage("agent", `Backend đang lỗi nên mình trả lời dự phòng nhé.\n\n${error.message}`);
     }
+  }
 
-    chatWindow.appendChild(bubble);
+  addMessage("agent", buildFallbackReply(question));
+}
+
+function renderSelectedFiles() {
+  fileList.innerHTML = "";
+  if (!selectedFiles.length) {
+    fileList.classList.remove("has-files");
+    return;
+  }
+  
+  fileList.classList.add("has-files");
+  selectedFiles.forEach((file, index) => {
+    const chip = document.createElement("div");
+    chip.className = "file-chip";
+    
+    const iconSpan = document.createElement("span");
+    iconSpan.className = "file-chip-icon";
+    iconSpan.textContent = getFileIcon(file.name);
+    
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "file-chip-name";
+    nameSpan.textContent = file.name;
+    
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "file-chip-remove";
+    removeBtn.type = "button";
+    removeBtn.setAttribute("aria-label", "Xóa tệp");
+    removeBtn.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+    `;
+    
+    removeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      selectedFiles.splice(index, 1);
+      renderSelectedFiles();
+    });
+    
+    chip.appendChild(iconSpan);
+    chip.appendChild(nameSpan);
+    chip.appendChild(removeBtn);
+    fileList.appendChild(chip);
   });
-  chatWindow.scrollTop = chatWindow.scrollHeight;
 }
 
-function renderState() {
-  routePill.textContent = routeLabel(state.memory.lastRoute);
-  routePill.className = `status-pill ${state.memory.lastRoute === "general" || state.memory.lastRoute === "course" ? "ok" : state.memory.lastRoute === "ready" ? "" : "low"}`;
-
-  renderList(traceList, state.lastRun.trace.length ? state.lastRun.trace : ["Agent chưa chạy."]);
-  renderList(toolList, state.lastRun.tools.length ? state.lastRun.tools : ["Chưa gọi tool."]);
-  renderList(
-    sourceList,
-    state.sources.length
-      ? state.sources.map((source) => `${source.title} · ${source.type} · ${source.status} · ${source.chunks.length} chunk(s)`)
-      : ["Chưa có course source. Nếu user hỏi nội dung khóa học, agent sẽ xin link/tài liệu."]
-  );
-  renderList(
-    evidenceList,
-    state.lastRun.evidence.length
-      ? state.lastRun.evidence.map(formatEvidenceItem)
-      : ["Chưa có retrieved evidence."]
-  );
-  answerContract.textContent = state.lastRun.contract || "Agent chưa chạy.";
-  answerContract.classList.toggle("muted", !state.lastRun.contract);
-  refusalBox.textContent = state.lastRun.refusal || "Không có refusal ở lượt này.";
-  refusalBox.classList.toggle("muted", !state.lastRun.refusal);
+function showTypingIndicator() {
+  if (document.getElementById("typingIndicator")) return;
+  
+  const indicatorHtml = `
+    <article class="message agent" id="typingIndicator">
+      <div class="avatar" aria-hidden="true">LO</div>
+      <div class="bubble">
+        <div class="typing-dots">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
+    </article>
+  `;
+  
+  quickPrompts.classList.add("hidden");
+  messages.insertAdjacentHTML("beforeend", indicatorHtml);
+  scrollToBottom();
 }
 
-function formatEvidenceItem(item) {
-  if (item.meta) {
-    return `${item.meta.title} · chunk ${item.meta.chunk_id}: ${item.text}`;
+function hideTypingIndicator() {
+  const indicator = document.getElementById("typingIndicator");
+  if (indicator) {
+    indicator.remove();
   }
-  if (item.title || item.url || item.snippet) {
-    return `${item.title || "Source"} · ${item.url || "no-url"}: ${item.snippet || item.text || ""}`;
-  }
-  return `${item.title || "Chunk"} · chunk ${item.chunk_id || "?"}: ${item.text || JSON.stringify(item)}`;
 }
 
-function routeLabel(route) {
-  return {
-    ready: "Ready",
-    course: "Course-grounded",
-    general: "General",
-    ambiguous: "Needs context",
-    ops: "Refusal"
-  }[route] || route;
+function createNewChat() {
+  const chat = createConversation();
+  conversations = [chat].concat(conversations);
+  activeId = chat.id;
+  selectedFiles = [];
+  renderSelectedFiles();
+  saveState();
+  renderMessages();
+  renderHistory();
+  setDrawer(false);
+  input.focus();
 }
 
-function sourceStatusForCourse() {
-  if (!state.sources.length) return "Missing course source";
-  return "Course source loaded";
-}
+/* ==========================================================================
+   EVENT LISTENERS
+   ========================================================================== */
+menuButton.addEventListener("click", () => setDrawer(true));
+closeDrawer.addEventListener("click", () => setDrawer(false));
+drawerBackdrop.addEventListener("click", () => setDrawer(false));
+newChatButton.addEventListener("click", createNewChat);
+headerNewChatButton.addEventListener("click", createNewChat);
 
-function askForCourseSource(question) {
-  const trace = [
-    "Read question and conversation memory.",
-    "Route = Course-grounded.",
-    "Course source is missing.",
-    "Ask user to provide GitHub/PDF/link/text before answering."
-  ];
-  const tools = ["No Git/PDF tool call because no source was provided."];
-  const message = [
-    "Mình cần tài liệu liên quan của khóa học trước khi trả lời câu này.",
-    "Bạn paste GitHub repo/file link, PDF/slide link, hoặc đoạn text từ README/rubric được không?",
-    "",
-    `Câu hỏi đang giữ trong memory: "${question}"`
-  ].join("\n");
+attachButton.addEventListener("click", () => {
+  fileInput.click();
+});
 
-  state.lastRun = {
-    trace,
-    tools,
-    evidence: [],
-    contract: [
-      "Detected route: Course-grounded",
-      "Source status: Missing course source",
-      "Answer: Chưa trả lời để tránh đoán sai nội dung khóa học.",
-      "Next action: User paste source rồi agent ingest/retrieve trong cùng conversation."
-    ].join("\n"),
-    refusal: "Không đoán nội dung slide/lab/rubric khi chưa có source khóa học."
-  };
-
-  pushMessage("agent", message, [
-    {
-      label: "Load sample source",
-      handler: () => {
-        sourceInput.value = samples.text;
-        loadSource();
-      }
-    },
-    {
-      label: "Use GitHub sample",
-      handler: () => {
-        sourceInput.value = samples.github;
-        loadSource();
-      }
-    },
-    {
-      label: "Use PDF sample",
-      handler: () => {
-        sourceInput.value = samples.pdf;
-        loadSource();
-      }
+fileInput.addEventListener("change", () => {
+  Array.from(fileInput.files).forEach((file) => {
+    // Avoid duplicates
+    if (!selectedFiles.some((f) => f.name === file.name && f.size === file.size)) {
+      selectedFiles.push(file);
     }
-  ]);
-}
+  });
+  fileInput.value = ""; // Reset so same file can trigger change again
+  renderSelectedFiles();
+});
 
-function buildCourseAnswer(question, evidence) {
-  const text = normalizeText(question);
-  const cited = evidence.map((item) => `${item.meta.title} chunk ${item.meta.chunk_id}`).join("; ");
+input.addEventListener("input", resizeInput);
 
-  let summary = "Mình tìm thấy nội dung liên quan trong source khóa học và tổng hợp theo tài liệu đã load.";
-  if (hasAny(text, ["build slice", "slice"])) {
-    summary = "Build slice là lát cắt nhỏ đủ để demo: một user, một task, một AI decision và một output nhìn thấy được.";
-  } else if (hasAny(text, ["thin spec", "spec"])) {
-    summary = "Thin SPEC là bản mô tả đủ để build prototype, tập trung evidence, slice, decision, failure path và owner plan.";
-  } else if (hasAny(text, ["failure"])) {
-    summary = "Failure path là tình huống AI/product sai, thiếu nguồn hoặc không đủ tự tin; prototype phải thể hiện cách recover.";
+// Handle Enter to Submit (while Shift+Enter inserts newline)
+input.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    form.requestSubmit();
   }
+});
 
-  return {
-    message: [
-      summary,
-      "",
-      "Cách áp dụng:",
-      "1. Chọn đúng khái niệm/lab đang hỏi.",
-      "2. Đối chiếu với source đã load.",
-      "3. Viết output thành checklist hoặc decision ngắn.",
-      "4. Nếu source thiếu hoặc mâu thuẫn, hỏi mentor thay vì tự đoán.",
-      "",
-      `Evidence: ${cited}`
-    ].join("\n"),
-    checklist: [
-      "Detected route: Course-grounded",
-      "Source status: Found in loaded course source",
-      `Reasoning summary: retrieved ${evidence.length} chunk(s), then summarized only from loaded course source.`,
-      `Answer summary: ${summary}`,
-      "Next action: áp dụng vào thin-spec/workflow hoặc hỏi mentor nếu cần source mới."
-    ].join("\n")
-  };
-}
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
 
-async function buildGeneralAnswer(question) {
-  const results = await adapters.tavilySearch(question);
-  const sources = results.map((item, index) => `${index + 1}. ${item.title} (${item.url})`).join("\n");
-  const answer = synthesizeGeneral(question, results);
-  return {
-    answer,
-    evidence: results.map((item, index) => ({
-      id: `web-${index + 1}`,
-      text: item.snippet,
-      meta: {
-        title: item.title,
-        chunk_id: index + 1,
-        source_url: item.url,
-        source_type: "tavily_result"
-      }
-    })),
-    contract: [
-      "Detected route: General learning",
-      "Source status: Public source found via Tavily",
-      `Reasoning summary: searched public web, compared ${results.length} result(s), then answered as general knowledge.`,
-      `Answer summary: ${answer.split("\n")[0]}`,
-      "Sources:",
-      sources
-    ].join("\n")
-  };
-}
+  const question = input.value.trim();
+  if (!question && !selectedFiles.length) return;
 
-function synthesizeGeneral(question, results) {
-  const text = normalizeText(question);
-  if (hasAny(text, ["build slice", "slice"])) {
-    return [
-      "Build slice là một phần rất nhỏ của sản phẩm được chọn để chứng minh giá trị hoặc rủi ro chính.",
-      "Reasoning: các nguồn về product discovery/MVP đều nhấn mạnh việc giảm scope để học nhanh. Với AI product, slice nên có một user, một task, một AI decision và một output kiểm chứng được.",
-      "Gợi ý áp dụng vào bài: đừng build cả Learning OS; chỉ demo một câu hỏi học tập đi qua route, search/source check, answer/refusal."
-    ].join("\n");
-  }
-  if (hasAny(text, ["rag", "retrieval"])) {
-    return [
-      "RAG là cách cho mô hình tìm tài liệu liên quan trước, rồi dùng tài liệu đó để trả lời.",
-      "Reasoning: workflow này giảm rủi ro bịa vì câu trả lời được neo vào retrieved evidence.",
-      "Gợi ý áp dụng vào bài: Tavily/Git/PDF reader là phần retrieval, Answer Composer là phần tổng hợp."
-    ].join("\n");
-  }
-  return [
-    "Đây là câu hỏi kiến thức chung nên agent dùng Tavily search trước khi trả lời.",
-    "Reasoning: không có dấu hiệu cần bám slide/lab cụ thể, nên có thể tổng hợp từ public sources.",
-    `Tóm tắt: ${results[0]?.snippet || "Không có snippet đủ rõ."}`
-  ].join("\n");
-}
+  const fileNames = selectedFiles.map((file) => file.name);
+  const userText = fileNames.length
+    ? (question ? question + "\n\n" : "") + "📁 **Tệp đính kèm:** " + fileNames.join(", ")
+    : question;
 
-function askClarifyingQuestion(question) {
-  state.lastRun = {
-    trace: [
-      "Read question and conversation memory.",
-      "Route = Ambiguous.",
-      "Ask one short clarification before tool call."
-    ],
-    tools: ["No tool call yet."],
-    evidence: [],
-    contract: [
-      "Detected route: Ambiguous",
-      "Source status: Waiting for clarification",
-      "Next action: user selects topic/source/goal; agent keeps same conversation."
-    ].join("\n"),
-    refusal: ""
-  };
+  addMessage("user", userText);
+  input.value = "";
+  resizeInput();
 
-  pushMessage("agent", "Bạn đang hỏi theo hướng nào để mình xử lý đúng?", [
-    {
-      label: "Kiến thức chung",
-      handler: () => runAgent(`${question} trong kiến thức chung`)
-    },
-    {
-      label: "Theo tài liệu khóa học",
-      handler: () => runAgent(`${question} theo slide/lab khóa học`)
-    },
-    {
-      label: "Checklist áp dụng",
-      handler: () => runAgent(`${question}. Tôi muốn checklist áp dụng vào bài lab.`)
+  const filesToProcess = [...selectedFiles];
+  selectedFiles = [];
+  renderSelectedFiles();
+
+  showTypingIndicator();
+  try {
+    if (filesToProcess.length) {
+      await handleAttachedFiles(filesToProcess);
     }
-  ]);
-}
-
-function refuseOps(question) {
-  const draft = `Mentor/TA ơi, thông tin chính thức mới nhất về "${question}" là gì, và nguồn nào nên dùng để kiểm chứng?`;
-  state.lastRun = {
-    trace: [
-      "Read question and conversation memory.",
-      "Route = Program Operations.",
-      "No official source loaded.",
-      "Refuse to guess internal rule/deadline."
-    ],
-    tools: ["No Tavily/Git/PDF call because ops rule needs official source."],
-    evidence: [],
-    contract: [
-      "Detected route: Program Operations",
-      "Source status: Missing official source",
-      "Answer summary: Không trả lời chắc về deadline/rule nội bộ.",
-      `Suggested follow-up: ${draft}`
-    ].join("\n"),
-    refusal: "Không đoán deadline, rule nộp repo, grading hoặc lịch nếu chưa có source chính thức."
-  };
-
-  pushMessage("agent", [
-    "Mình không nên đoán rule/deadline nội bộ.",
-    "Bạn paste source chính thức nếu có, còn không thì có thể hỏi mentor bằng câu này:",
-    `"${draft}"`
-  ].join("\n"));
-}
-
-async function runAgent(rawQuestion) {
-  const question = rawQuestion.trim();
-  if (!question) return;
-
-  pushMessage("user", question);
-  questionInput.value = "";
-
-  if (canUseBackend()) {
-    try {
-      const result = await apiPost("/api/ask", { question });
-      state.memory.lastRoute = normalizeBackendRoute(result.route);
-      state.lastRun = {
-        trace: result.trace || [],
-        tools: result.tool_calls || [],
-        evidence: result.evidence || [],
-        contract: [
-          `Detected route: ${result.route}`,
-          `Source status: ${result.source_status}`,
-          "",
-          result.answer || "",
-          result.suggested_follow_up ? `\nSuggested follow-up: ${result.suggested_follow_up}` : ""
-        ].join("\n"),
-        refusal: result.refusal || ""
-      };
-      pushMessage("agent", result.answer || "Agent không có câu trả lời.");
-      renderState();
-      return;
-    } catch (error) {
-      pushMessage("agent", `Backend API lỗi, fallback sang demo local.\n${error.message}`);
+    if (question) {
+      await processQuestion(question);
     }
-  }
-
-  const route = detectRoute(question);
-  state.memory.lastRoute = route;
-
-  if (route === "ambiguous") {
-    askClarifyingQuestion(question);
-    renderState();
-    return;
-  }
-
-  if (route === "ops") {
-    refuseOps(question);
-    renderState();
-    return;
-  }
-
-  if (route === "course") {
-    if (!state.sources.some(sourceIsCourse)) {
-      askForCourseSource(question);
-      renderState();
-      return;
-    }
-
-    const trace = [
-      "Read question and conversation memory.",
-      "Route = Course-grounded.",
-      "Course source exists.",
-      "Retrieve relevant chunks from loaded source.",
-      "Compose answer only from source evidence."
-    ];
-    const tools = ["Course Source Retriever: local chunks from pasted/Git/PDF/web source."];
-    const evidence = retrieveFromSources(question);
-
-    if (!evidence.length) {
-      state.lastRun = {
-        trace: [...trace, "Source check = Missing relevant chunk."],
-        tools,
-        evidence: [],
-        contract: [
-          "Detected route: Course-grounded",
-          "Source status: Course source loaded, but no relevant chunk found",
-          "Answer summary: Không trả lời chắc vì source không có đoạn liên quan.",
-          "Next action: paste đúng slide/repo/PDF hoặc hỏi mentor."
-        ].join("\n"),
-        refusal: "Không tìm thấy đoạn liên quan trong source đã load, nên agent không đoán."
-      };
-      pushMessage("agent", "Mình có source khóa học, nhưng chưa tìm thấy đoạn liên quan đến câu hỏi này. Bạn paste thêm đúng slide/repo/PDF hoặc đoạn text liên quan nhé.");
-      renderState();
-      return;
-    }
-
-    const answer = buildCourseAnswer(question, evidence);
-    state.lastRun = {
-      trace,
-      tools,
-      evidence,
-      contract: answer.checklist,
-      refusal: ""
-    };
-    pushMessage("agent", answer.message);
-    renderState();
-    return;
-  }
-
-  const trace = [
-    "Read question and conversation memory.",
-    "Route = General learning.",
-    "Use Tavily public search.",
-    "Synthesize reasoning from public results.",
-    "Return answer with source URLs."
-  ];
-  const tools = [`Tavily Search: "${question}"`];
-  const answer = await buildGeneralAnswer(question);
-  state.lastRun = {
-    trace,
-    tools,
-    evidence: answer.evidence,
-    contract: answer.contract,
-    refusal: ""
-  };
-  pushMessage("agent", answer.answer);
-  renderState();
-}
-
-function normalizeBackendRoute(route) {
-  return {
-    course_grounded: "course",
-    general_learning: "general",
-    program_operations: "ops",
-    ambiguous: "ambiguous"
-  }[route] || route || "ready";
-}
-
-async function loadSource() {
-  const raw = sourceInput.value.trim();
-  const type = detectSourceType(raw);
-  if (type === "empty") return;
-
-  if (canUseBackend()) {
-    try {
-      const result = await apiPost("/api/source", { source: raw });
-      const source = {
-        id: `source-${state.sources.length + 1}`,
-        type: result.type || type,
-        title: result.title || "Backend source",
-        status: result.status || "Loaded",
-        url: raw,
-        note: result.note || "",
-        chunks: []
-      };
-      state.sources.push(source);
-      sourceInput.value = "";
-      state.lastRun = {
-        trace: ["Backend source ingestion.", `Detected source type = ${source.type}.`, `Chunks = ${result.chunks || 0}.`],
-        tools: [`/api/source: ${source.type}`],
-        evidence: [],
-        contract: [
-          "Detected route: Source ingestion",
-          `Source status: ${source.status}`,
-          `Loaded source: ${source.title}`,
-          `Chunks: ${result.chunks || 0}`,
-          `Note: ${source.note}`
-        ].join("\n"),
-        refusal: source.status === "missing" || source.status === "ocr_needed" ? source.note : ""
-      };
-      pushMessage("agent", `Backend đã load source: ${source.title}. Bây giờ bạn có thể hỏi câu bám theo tài liệu khóa học.`);
-      renderState();
-      return;
-    } catch (error) {
-      pushMessage("agent", `Backend source API lỗi, fallback sang loader local.\n${error.message}`);
-    }
-  }
-
-  const id = `source-${state.sources.length + 1}`;
-  const retrievedAt = new Date().toLocaleString("vi-VN");
-  let source;
-
-  if (type === "github_repo" || type === "github_file") {
-    const result = await adapters.readGitHub(raw);
-    source = {
-      id,
-      type,
-      title: result.title || "GitHub source",
-      status: result.status === "adapter_missing" ? "Adapter pending" : "Loaded",
-      url: raw,
-      note: result.note || "GitHub content loaded.",
-      chunks: chunkText(result.text || "", { id, type, title: result.title || "GitHub source", source_url: raw, retrieved_at: retrievedAt })
-    };
-    state.lastRun.tools = [`GitHub Reader: ${raw}`];
-  } else if (type === "pdf") {
-    const result = await adapters.readPdf(raw);
-    source = {
-      id,
-      type,
-      title: result.title || "PDF source",
-      status: result.status === "adapter_missing" ? "Adapter pending" : "Loaded",
-      url: raw,
-      note: result.note || "PDF content loaded.",
-      chunks: chunkText(result.text || "", { id, type, title: result.title || "PDF source", source_url: raw, retrieved_at: retrievedAt })
-    };
-    state.lastRun.tools = [`PDF Reader: ${raw}`];
-  } else if (type === "web") {
-    source = {
-      id,
-      type,
-      title: "Web source link",
-      status: "Loaded as link",
-      url: raw,
-      note: "Tavily có thể search/read web link này ở bản backend.",
-      chunks: chunkText(`Web source link provided: ${raw}. Use Tavily reader/search to fetch readable content before answering course-grounded questions.`, {
-        id,
-        type,
-        title: "Web source link",
-        source_url: raw,
-        retrieved_at: retrievedAt
-      })
-    };
-    state.lastRun.tools = [`Web Source Placeholder: ${raw}`];
-  } else {
-    source = {
-      id,
-      type,
-      title: "Pasted course text",
-      status: "Loaded",
-      url: "pasted-text",
-      note: "Text đã sẵn sàng để retrieve.",
-      chunks: chunkText(raw, { id, type, title: "Pasted course text", source_url: "pasted-text", retrieved_at: retrievedAt })
-    };
-    state.lastRun.tools = ["Pasted Text Loader"];
-  }
-
-  state.sources.push(source);
-  sourceInput.value = "";
-  state.lastRun.trace = ["Load source.", `Detected source type = ${type}.`, `Created ${source.chunks.length} chunk(s).`];
-  state.lastRun.evidence = [];
-  state.lastRun.contract = [
-    "Detected route: Source ingestion",
-    `Source status: ${source.status}`,
-    `Loaded source: ${source.title}`,
-    `Chunks: ${source.chunks.length}`,
-    `Note: ${source.note}`
-  ].join("\n");
-  state.lastRun.refusal = source.status === "Adapter pending" ? "Tool adapter đang chờ teammate cắm implementation thật." : "";
-  pushMessage("agent", `Đã load source: ${source.title}. Bây giờ bạn có thể hỏi câu bám theo tài liệu khóa học.`);
-  renderState();
-}
-
-function mockTavilySearch(query) {
-  const text = normalizeText(query);
-  if (hasAny(text, ["build slice", "slice"])) {
-    return [
-      {
-        title: "MVP and product slice concept",
-        url: "https://www.productplan.com/glossary/minimum-viable-product/",
-        snippet: "MVP/product slice focuses on the smallest useful product version that can create learning from real users."
-      },
-      {
-        title: "Agile vertical slicing",
-        url: "https://www.agilealliance.org/glossary/vertical-slicing/",
-        snippet: "Vertical slicing breaks work into small end-to-end increments that deliver visible user value."
-      }
-    ];
-  }
-  if (hasAny(text, ["rag", "retrieval"])) {
-    return [
-      {
-        title: "Retrieval-augmented generation overview",
-        url: "https://en.wikipedia.org/wiki/Retrieval-augmented_generation",
-        snippet: "Retrieval-augmented generation retrieves relevant documents before generating an answer."
-      },
-      {
-        title: "RAG pattern",
-        url: "https://www.promptingguide.ai/techniques/rag",
-        snippet: "RAG grounds model outputs in external context to improve factuality and source alignment."
-      }
-    ];
-  }
-  return [
-    {
-      title: "Public web result",
-      url: "https://example.com/search-result",
-      snippet: `Mock Tavily result for: ${query}. Backend can replace this with real Tavily API output.`
-    }
-  ];
-}
-
-function resetApp() {
-  state.messages = [];
-  state.sources = [];
-  state.memory = { lastRoute: "ready", missingInfo: [], corrections: [] };
-  state.lastRun = { trace: [], tools: [], evidence: [], contract: "", refusal: "" };
-  questionInput.value = "";
-  sourceInput.value = "";
-  pushMessage("agent", "Chào Phúc, mình là Learning OS Support Agent. Hỏi kiến thức chung thì mình search web; hỏi bài học/slide/lab cụ thể thì mình sẽ xin source khóa học trước.");
-  renderState();
-}
-
-sendBtn.addEventListener("click", () => runAgent(questionInput.value));
-questionInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-    runAgent(questionInput.value);
+  } finally {
+    hideTypingIndicator();
   }
 });
-resetBtn.addEventListener("click", resetApp);
-loadSourceBtn.addEventListener("click", loadSource);
-sampleTextBtn.addEventListener("click", () => {
-  sourceInput.value = samples.text;
-});
-sampleGitBtn.addEventListener("click", () => {
-  sourceInput.value = samples.github;
-});
-samplePdfBtn.addEventListener("click", () => {
-  sourceInput.value = samples.pdf;
-});
-sampleGeneralBtn.addEventListener("click", () => {
-  questionInput.value = samples.general;
-});
-sampleCourseBtn.addEventListener("click", () => {
-  questionInput.value = samples.course;
-});
-sampleAmbiguousBtn.addEventListener("click", () => {
-  questionInput.value = samples.ambiguous;
-});
-sampleOpsBtn.addEventListener("click", () => {
-  questionInput.value = samples.ops;
+
+document.querySelectorAll("[data-prompt]").forEach((button) => {
+  button.addEventListener("click", () => {
+    input.value = button.dataset.prompt;
+    resizeInput();
+    input.focus();
+  });
 });
 
-resetApp();
+messages.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-action-index]");
+  if (!button) return;
+
+  const messageId = button.getAttribute("data-message-id");
+  const actionIndex = Number(button.getAttribute("data-action-index"));
+  const chat = getActiveConversation();
+  const message = chat.messages.find((item) => item.id === messageId);
+  const action = message && message.actions ? message.actions[actionIndex] : null;
+  if (action && typeof action.handler === "function") {
+    action.handler();
+  }
+});
+
+/* ==========================================================================
+   INITIALIZATION
+   ========================================================================== */
+initTheme();
+saveState();
+renderMessages();
+renderHistory();

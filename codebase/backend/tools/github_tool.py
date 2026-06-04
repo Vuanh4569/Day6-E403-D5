@@ -11,6 +11,18 @@ from config import load_env
 
 PRIORITY_NAMES = ("readme", "guide", "assignment", "rubric", "spec", "lab", "day")
 PRIORITY_EXTS = (".md", ".txt", ".ipynb")
+BRANCH_CANDIDATES = ("main", "master", "phuc-dev")
+FALLBACK_PRIORITY_PATHS = (
+    "README.md",
+    "readme.md",
+    "spec/README.md",
+    "codebase/README.md",
+    "hackathon-rules.md",
+    "docs/README.md",
+    "docs/readme.md",
+    "rubric.md",
+    "assignment.md",
+)
 
 
 def read_github(url: str) -> dict[str, str]:
@@ -53,29 +65,52 @@ def fetch_raw_github_file(parsed: dict[str, str]) -> str:
 
 
 def fetch_repo_priority_text(owner: str, repo: str, ref: str) -> str:
-    tree = github_api_json(f"https://api.github.com/repos/{owner}/{repo}/git/trees/{ref}?recursive=1")
-    files = [
-        item["path"]
-        for item in tree.get("tree", [])
-        if item.get("type") == "blob" and is_priority_file(item.get("path", ""))
-    ][:12]
-    chunks: list[str] = []
-    for path in files:
-        try:
-            content = github_api_json(f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}")
-            if content.get("encoding") == "base64":
-                text = base64.b64decode(content.get("content", "")).decode("utf-8", errors="ignore")
-            else:
-                text = get_text(content.get("download_url", ""))
-            chunks.append(f"\n\n# FILE: {path}\n{text[:8000]}")
-        except Exception:
-            continue
-    return "\n".join(chunks)
+    try:
+        tree = github_api_json(f"https://api.github.com/repos/{owner}/{repo}/git/trees/{ref}?recursive=1")
+        files = [
+            item["path"]
+            for item in tree.get("tree", [])
+            if item.get("type") == "blob" and is_priority_file(item.get("path", ""))
+        ][:12]
+        chunks: list[str] = []
+        for path in files:
+            try:
+                content = github_api_json(f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}")
+                if content.get("encoding") == "base64":
+                    text = base64.b64decode(content.get("content", "")).decode("utf-8", errors="ignore")
+                else:
+                    text = get_text(content.get("download_url", ""))
+                chunks.append(f"\n\n# FILE: {path}\n{text[:8000]}")
+            except Exception:
+                continue
+        if chunks:
+            return "\n".join(chunks)
+    except Exception:
+        pass
+
+    return fetch_repo_priority_text_fallback(owner, repo)
 
 
 def is_priority_file(path: str) -> bool:
     lowered = path.lower()
     return lowered.endswith(PRIORITY_EXTS) and any(name in lowered for name in PRIORITY_NAMES)
+
+
+def fetch_repo_priority_text_fallback(owner: str, repo: str) -> str:
+    chunks: list[str] = []
+    for ref in BRANCH_CANDIDATES:
+        for path in FALLBACK_PRIORITY_PATHS:
+            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+            try:
+                text = get_text(raw_url)
+            except Exception:
+                continue
+            if not text.strip():
+                continue
+            chunks.append(f"\n\n# FILE: {path}\n{text[:8000]}")
+        if chunks:
+            break
+    return "\n".join(chunks)
 
 
 def github_api_json(url: str) -> dict:
@@ -96,4 +131,3 @@ def github_headers() -> dict[str, str]:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
-
