@@ -106,7 +106,7 @@ class LearningOSAgent:
     def detect_route(self, question: str) -> Route:
         return self.router.route(question)
 
-    def load_source(self, raw: str) -> Source:
+    def load_source(self, raw: str, title: str | None = None) -> Source:
         source_type = detect_source_type(raw)
         if source_type == "github_repo" or source_type == "github_file":
             result = read_github(raw)
@@ -115,7 +115,10 @@ class LearningOSAgent:
         elif source_type == "web":
             result = read_web(raw)
         else:
-            result = {"status": "loaded", "title": "Pasted course text", "text": raw, "note": "Pasted by user"}
+            result = {"status": "loaded", "title": title or "Pasted course text", "text": raw, "note": "Pasted by user"}
+
+        if title:
+            result["title"] = title
 
         source = Source(
             title=result.get("title", "Course source"),
@@ -154,8 +157,102 @@ class LearningOSAgent:
             return matches
         return [word for word in re.split(r"\W+", text) if len(word) > 3][:8]
 
+    def _is_summarize_intent(self, question: str) -> bool:
+        text = question.lower().strip()
+        plain = normalize_plain(text)
+        keywords = ["doc", "quet", "phan tich", "tom tat", "gioi thieu", "overview", "review", "so luoc", "chi tiet", "read", "summarize", "analyze", "scan", "co gi"]
+        
+        urls = re.findall(r'(https?://[^\s]+)', question)
+        if urls and len(text.replace(urls[0], "").strip()) < 15:
+            return True
+            
+        return any(kw in plain for kw in keywords)
+
     def ask(self, question: str, conversation: list[dict[str, str]] | None = None) -> AgentResult:
+        # ── 0. Early off-topic gate (runs before URL loading & routing) ──
+        if self.guard.is_off_topic(question):
+            return AgentResult(
+                route=Route.GENERAL,
+                source_status="refused_by_guard",
+                answer="Câu hỏi này nằm ngoài phạm vi cho phép. Mình chỉ hỗ trợ các chủ đề liên quan đến học tập, lập trình và AI.",
+                trace=["Read question", "Early off-topic gate", "Refused — out of scope"],
+                tool_calls=["guard_off_topic_heuristic"],
+                evidence=[],
+                refusal="off_topic",
+            )
+
+        # Extract and load any URLs in the question automatically
+        urls = re.findall(r'(https?://[^\s]+)', question)
+        new_sources = []
+        loaded_tool_calls = []
+        for url in urls:
+            cleaned_url = url.rstrip('.,?!)("')
+            if not any(s.source_url == cleaned_url for s in self.sources):
+                try:
+                    source = self.load_source(cleaned_url)
+                    new_sources.append(source)
+                    if source.source_type in ("github_repo", "github_file"):
+                        loaded_tool_calls.append(f"github_reader_tool(url='{cleaned_url}')")
+                    elif source.source_type == "pdf":
+                        loaded_tool_calls.append(f"pdf_reader_tool(url='{cleaned_url}')")
+                    elif source.source_type == "web":
+                        loaded_tool_calls.append(f"web_reader_tool(url='{cleaned_url}')")
+                except Exception:
+                    pass
+
+        # Check for URL/Source Summarization / Analysis Flow
+        if self._is_summarize_intent(question):
+            summarize_target = None
+            if new_sources:
+                summarize_target = new_sources[-1]
+            elif self.sources:
+                summarize_target = self.sources[-1]
+
+            if summarize_target:
+                target_chunks = summarize_target.chunks[:10]
+                evidence_data = [
+                    {
+                        "title": chunk.title,
+                        "url": "uploaded-file" if chunk.source_url.lower().startswith("data:") else chunk.source_url,
+                        "chunk_id": chunk.chunk_id,
+                        "text": chunk.text,
+                    }
+                    for chunk in target_chunks
+                ]
+                tool_name = "github_reader_tool" if summarize_target.source_type in ("github_repo", "github_file") else "pdf_reader_tool" if summarize_target.source_type == "pdf" else "web_reader_tool" if summarize_target.source_type == "web" else "pasted_text"
+                
+                composer_ans = self.composer.compose(
+                    route="Course-grounded",
+                    question=f"Hãy tóm tắt và phân tích chi tiết nguồn tài liệu/repository này: {summarize_target.title}",
+                    evidence=evidence_data,
+                    context={
+                        "answer_intent": "summarize_source",
+                        "source_title": summarize_target.title,
+                        "source_type": summarize_target.source_type,
+                        "tool_called": tool_name,
+                    }
+                )
+                if not composer_ans:
+                    composer_ans = f"Mình đã sử dụng công cụ **{tool_name}** để tải thành công và phân tích nội dung từ **{summarize_target.title}**.\n\n**Điểm chính:**\n- Tài liệu này chứa {len(summarize_target.chunks)} đoạn nội dung.\n- Đây là nguồn tài liệu loại `{summarize_target.source_type}`.\n- Trích dẫn: {summarize_target.note or 'Không có ghi chú.'}"
+                
+                final_answer = self.attach_sources(composer_ans, [{"title": summarize_target.title, "url": summarize_target.source_url}])
+                all_tool_calls = self.decision_tool_calls()
+                if tool_name != "pasted_text":
+                    all_tool_calls.append(f"{tool_name}(url='{summarize_target.source_url}')")
+                all_tool_calls.append(self.composer.call_label())
+                
+                return AgentResult(
+                    route=Route.COURSE,
+                    source_status="found_course_source",
+                    answer=final_answer,
+                    trace=["Read question", "Detected summarize intent", f"Load URL: {summarize_target.source_url}", f"Run {tool_name}", "Compose source-grounded summary"],
+                    tool_calls=all_tool_calls,
+                    evidence=evidence_data,
+                )
+
         active_conversation = list(conversation or self.memory)
+        if len(active_conversation) > 10:
+            active_conversation = active_conversation[-10:]
         resolved_question = self.resolve_question(question, active_conversation)
         self.memory = active_conversation
         if not self.memory or self.memory[-1].get("role") != "user" or self.memory[-1].get("content") != question:
@@ -175,7 +272,7 @@ class LearningOSAgent:
                     "3. Cách áp dụng ngay vào bài đang làm"
                 ),
                 trace=["Read question", "Decision = clarify", "Ask clarification"],
-                tool_calls=self.decision_tool_calls(),
+                tool_calls=self.decision_tool_calls() + loaded_tool_calls,
                 evidence=[],
                 suggested_follow_up="Hãy nói rõ: general knowledge hay course-grounded.",
                 follow_up_options=[
@@ -191,18 +288,61 @@ class LearningOSAgent:
                 source_status="model_knowledge_only",
                 answer=self.answer_small_talk(question),
                 trace=["Read question", "Decision = small_talk", "Answer directly without search"],
-                tool_calls=self.decision_tool_calls(),
+                tool_calls=self.decision_tool_calls() + loaded_tool_calls,
                 evidence=[],
             )
+
+        # Run Guard check for potential off-topic or policy violations
+        if decision.mode in {"course", "general_model", "general_search", "ops"}:
+            source_status = "found" if self.sources else "missing"
+            conversation_history = [
+                f"{'User' if m.get('role') == 'user' else 'Agent'}: {m.get('content')}"
+                for m in active_conversation[-6:]
+            ]
+            guard_result = self.guard.check(
+                route=route.value,
+                question=resolved_question,
+                source_status=source_status,
+                conversation_memory=conversation_history
+            )
+            if not guard_result.get("allow_answer", True):
+                # Phân biệt: ngoài chủ đề vs thiếu nguồn
+                unknown = guard_result.get("unknown_note", "")
+                if unknown == "off_topic" or "ngoài phạm vi" in (guard_result.get("refusal") or ""):
+                    answer_msg = "Câu hỏi này nằm ngoài phạm vi cho phép. Mình chỉ hỗ trợ các chủ đề liên quan đến học tập, lập trình và AI."
+                else:
+                    answer_msg = (
+                        "Câu hỏi này cần có thông tin tham khảo để trả lời chính xác.\n\n"
+                        "**Vui lòng nạp nguồn học liệu bằng một trong các cách sau:**\n"
+                        "- Paste link GitHub repo hoặc file\n"
+                        "- Paste link PDF hoặc slide\n"
+                        "- Paste đoạn text từ rubric, README, hoặc tài liệu liên quan"
+                    )
+                return AgentResult(
+                    route=route,
+                    source_status="refused_by_guard",
+                    answer=answer_msg,
+                    trace=["Read question", f"Decision = {decision.mode}", "Guard check", "Refused by Guard"],
+                    tool_calls=self.decision_tool_calls() + ["guard_agent"] + loaded_tool_calls,
+                    evidence=[],
+                    refusal=guard_result.get("refusal", ""),
+                    suggested_follow_up=guard_result.get("draft_question_to_mentor", "")
+                )
 
         if decision.mode == "ops" or route == Route.OPS:
             refusal, draft = self.guard.ops_without_source(resolved_question)
             return AgentResult(
                 route=Route.OPS,
                 source_status="missing_official_source",
-                answer="Mình không trả lời chắc về deadline/rule nội bộ nếu chưa có source chính thức.",
-                trace=["Read question", "Decision = ops", "Refuse to guess"],
-                tool_calls=self.decision_tool_calls(),
+                answer=(
+                    "Câu hỏi này cần có thông tin tham khảo chính thức để trả lời chính xác.\n\n"
+                    "**Vui lòng nạp nguồn học liệu bằng một trong các cách sau:**\n"
+                    "- Paste nội dung thông báo deadline/quy chế từ kênh chính thức\n"
+                    "- Paste link tài liệu hoặc document liên quan\n"
+                    "- Hỏi trực tiếp mentor/TA để có thông tin chính xác nhất"
+                ),
+                trace=["Read question", "Decision = ops", "Missing official source"],
+                tool_calls=self.decision_tool_calls() + loaded_tool_calls,
                 evidence=[],
                 refusal=refusal,
                 suggested_follow_up=draft,
@@ -215,14 +355,14 @@ class LearningOSAgent:
                     route=Route.COURSE,
                     source_status="missing_course_source",
                     answer=(
-                        "Mình chưa muốn đoán sai phần này, nên mình cần source khóa học trước đã.\n\n"
-                        "**Bạn có thể gửi một trong các nguồn sau:**\n"
-                        "- GitHub repo hoặc file\n"
-                        "- PDF hoặc slide link\n"
-                        "- Đoạn text từ README, rubric, hoặc slide"
+                        "Câu hỏi này cần có thông tin tham khảo để trả lời chính xác.\n\n"
+                        "**Vui lòng nạp nguồn học liệu bằng một trong các cách sau:**\n"
+                        "- Paste link GitHub repo hoặc file\n"
+                        "- Paste link PDF hoặc slide\n"
+                        "- Paste đoạn text từ README, rubric, hoặc slide"
                     ),
                     trace=["Read question", "Decision = course", "Course source missing"],
-                    tool_calls=self.decision_tool_calls(),
+                    tool_calls=self.decision_tool_calls() + loaded_tool_calls,
                     evidence=[],
                     refusal=refusal,
                     suggested_follow_up=follow_up,
@@ -246,7 +386,7 @@ class LearningOSAgent:
                         "- paste đúng đoạn text liên quan"
                     ),
                     trace=["Read question", "Decision = course", "Retrieve course chunks", "No relevant chunk"],
-                    tool_calls=self.decision_tool_calls() + ["course_retriever"],
+                    tool_calls=self.decision_tool_calls() + ["course_retriever"] + loaded_tool_calls,
                     evidence=[],
                     refusal=refusal,
                     suggested_follow_up=follow_up,
@@ -262,7 +402,7 @@ class LearningOSAgent:
                 source_status="found_course_source",
                 answer=answer,
                 trace=["Read question", "Decision = course", "Retrieve course chunks", "Compose source-grounded answer"],
-                tool_calls=self.decision_tool_calls() + ["retriever_agent", self.composer.call_label()],
+                tool_calls=self.decision_tool_calls() + ["retriever_agent", self.composer.call_label()] + loaded_tool_calls,
                 evidence=[chunk.__dict__ for chunk in evidence],
             )
 
@@ -280,7 +420,7 @@ class LearningOSAgent:
                     "Use model knowledge first",
                     "Skip search because question is basic or conversational",
                 ],
-                tool_calls=self.decision_tool_calls() + [self.composer.call_label()],
+                tool_calls=self.decision_tool_calls() + [self.composer.call_label()] + loaded_tool_calls,
                 evidence=[],
             )
         results = tavily_multi_search(query_plan.search_queries)
@@ -302,7 +442,7 @@ class LearningOSAgent:
                 "Search across public domains",
                 "Synthesize grounded answer",
             ],
-            tool_calls=tool_calls,
+            tool_calls=tool_calls + loaded_tool_calls,
             evidence=results,
         )
 
@@ -374,19 +514,62 @@ class LearningOSAgent:
 
     def answer_small_talk(self, question: str) -> str:
         text = normalize(question)
-        if "cảm ơn" in text or "cam on" in text:
+        plain = normalize_plain(question)
+        if "cảm ơn" in text or "cam on" in plain:
             return "Không có gì, mình ở đây để giúp bạn học nhanh hơn và đỡ phải mò tài liệu một mình."
-        if "bạn là ai" in text or "ban la ai" in text:
+        if "bạn là ai" in text or "ban la ai" in plain:
             return (
-                "Mình là Learning OS Agent. Mình hỗ trợ bạn theo hai kiểu chính:\n\n"
-                "- giải thích kiến thức chung bằng ngôn ngữ dễ hiểu\n"
-                "- đọc repo, PDF hoặc tài liệu khóa học để trả lời bám đúng source\n\n"
-                "Nếu bạn muốn, cứ hỏi một khái niệm hoặc gửi source luôn là mình xử lý tiếp."
+                "Mình là **Learning OS Agent** — trợ lý học tập AI được xây dựng cho khóa AI Thực Chiến.\n\n"
+                "Mình hỗ trợ bạn theo hai kiểu chính:\n"
+                "- **Giải thích kiến thức chung**: AI, lập trình, khái niệm học thuật bằng ngôn ngữ tự nhiên, dễ hiểu.\n"
+                "- **Phân tích source khóa học**: Đọc GitHub repo, PDF, slide, rubric rồi trả lời bám đúng nội dung.\n\n"
+                "Bạn có thể hỏi thẳng một câu hỏi, hoặc gửi link/tệp để mình đọc cùng."
             )
-        if "bạn làm được gì" in text or "ban lam duoc gi" in text or "giúp được gì" in text or "giup duoc gi" in text:
+        if "bạn làm được gì" in text or "ban lam duoc gi" in plain or "giúp được gì" in text or "giup duoc gi" in plain:
             return (
-                "Mình có thể giúp bạn giải thích khái niệm, tóm tắt tài liệu, đọc repo hoặc PDF, và chỉ ra phần nào còn thiếu source trước khi trả lời chắc."
+                "Mình làm được khá nhiều thứ:\n\n"
+                "**📚 Giải thích kiến thức**\n"
+                "- Giải thích khái niệm AI, lập trình, product thinking, agentic systems...\n"
+                "- Cho ví dụ minh họa, so sánh các phương pháp, tóm tắt nhanh.\n\n"
+                "**🔍 Phân tích tài liệu**\n"
+                "- Đọc GitHub repo → tóm tắt cấu trúc, mục tiêu, cách hoạt động.\n"
+                "- Đọc PDF / bài báo → tóm tắt theo chương, điểm chính, kết quả.\n"
+                "- Đọc slide, rubric, README → trả lời câu hỏi bám đúng source.\n\n"
+                "**🌐 Tìm kiếm công khai**\n"
+                "- Tìm thêm thông tin mới nhất, so sánh benchmark, nguồn tham khảo.\n\n"
+                "Chỉ cần hỏi hoặc paste link vào — mình tự xử lý phần còn lại."
             )
+
+        # Capability / topic questions — use LLM for contextual answer
+        capability_patterns = [
+            "co the tra loi", "tra loi cau hoi nao", "chu de nao", "chu de gi",
+            "co the noi chuyen", "ban biet gi", "ban hieu gi", "ho tro gi",
+            "lam duoc nhung gi", "lam duoc gi", "co the lam duoc",
+            "chuc nang gi", "tinh nang gi", "kha nang",
+            "co the hoi", "nhung chu de", "nhung gi",
+            "ban co the", "ho tro duoc gi", "toi co the hoi",
+        ]
+        if any(kw in plain for kw in capability_patterns):
+            capability_answer = self.composer.compose(
+                route="General learning",
+                question=question,
+                evidence=[],
+                context={
+                    "source_status": "model_knowledge_only",
+                    "use_model_knowledge": True,
+                    "answer_intent": "capability_intro",
+                    "bot_role": (
+                        "Bạn là Learning OS Agent — trợ lý học tập AI cho khóa AI Thực Chiến. "
+                        "Bạn có thể: (1) giải thích kiến thức chung về AI, lập trình, product; "
+                        "(2) đọc và phân tích GitHub repo, PDF, slide, rubric theo nguồn thực; "
+                        "(3) tìm kiếm thông tin công khai qua Tavily. "
+                        "Hãy trả lời câu hỏi của user về khả năng và chủ đề bạn có thể hỗ trợ."
+                    ),
+                },
+            )
+            if capability_answer:
+                return capability_answer
+
         return "Chào bạn, mình sẵn sàng hỗ trợ. Bạn có thể hỏi kiến thức chung hoặc gửi repo/PDF để mình đọc cùng."
 
     def is_under_specified(self, question: str) -> bool:
@@ -434,7 +617,7 @@ class LearningOSAgent:
             evidence=[
                 {
                     "title": chunk.title,
-                    "url": chunk.source_url,
+                    "url": "uploaded-file" if chunk.source_url.lower().startswith("data:") else chunk.source_url,
                     "chunk_id": chunk.chunk_id,
                     "text": chunk.text,
                 }
@@ -569,7 +752,10 @@ class LearningOSAgent:
             if not url or url in seen:
                 continue
             seen.add(url)
-            lines.append(f"- [{title}]({url})")
+            if url.lower().startswith("data:"):
+                lines.append(f"- {title} (Tệp tải lên)")
+            else:
+                lines.append(f"- [{title}]({url})")
             if len(lines) >= 4:
                 break
         return lines

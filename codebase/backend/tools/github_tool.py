@@ -27,6 +27,57 @@ FALLBACK_PRIORITY_PATHS = (
 
 def read_github(url: str) -> dict[str, str]:
     load_env()
+    
+    # Try using Node.js github-reader-tool if it's a repository
+    try:
+        parsed = parse_github_url(url)
+        if parsed["kind"] == "repo":
+            import socket
+            import subprocess
+            import time
+            from pathlib import Path
+
+            def is_port_open(port: int) -> bool:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    return s.connect_ex(('127.0.0.1', port)) == 0
+
+            # If Node.js server is not running on port 3000, start it
+            if not is_port_open(3000):
+                tool_dir = Path(__file__).resolve().parents[2] / "github-reader-tool"
+                server_js = tool_dir / "server.js"
+                if server_js.exists():
+                    subprocess.Popen(["node", "server.js"], cwd=str(tool_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    for _ in range(40):
+                        if is_port_open(3000):
+                            break
+                        time.sleep(0.1)
+
+            if is_port_open(3000):
+                token = os.getenv("GITHUB_TOKEN", "").strip()
+                payload = {
+                    "githubUrl": url,
+                    "githubToken": token
+                }
+                req = urllib.request.Request(
+                    "http://127.0.0.1:3000/api/read-github",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                    if data.get("success"):
+                        return {
+                            "status": "loaded",
+                            "title": data.get("repo", f"{parsed['owner']}/{parsed['repo']}"),
+                            "text": data.get("text", ""),
+                            "note": f"Read {data.get('fileCount', 0)} files via Node.js github-reader-tool."
+                        }
+    except Exception as exc:
+        # Fallback to native python implementation silently
+        pass
+
+    # Native Python Fallback
     try:
         parsed = parse_github_url(url)
         if parsed["kind"] == "file":

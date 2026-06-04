@@ -157,8 +157,23 @@ class DecisionAgent:
         short_greetings = ["hello", "hi", "helo", "xin chao", "chao", "cam on"]
         if len(plain) <= 20 and any(plain == marker or plain.startswith(marker + " ") for marker in short_greetings):
             return True
+        # Exact capability/intro phrases (original)
         exact_intros = ["ban la ai", "ban lam duoc gi", "giup duoc gi"]
-        return any(marker in plain for marker in exact_intros) and len(plain) <= 40
+        if any(marker in plain for marker in exact_intros) and len(plain) <= 40:
+            return True
+        # Broader capability / topic questions about the bot itself
+        capability_patterns = [
+            "co the tra loi", "tra loi duoc", "tra loi cau hoi nao",
+            "chu de nao", "chu de gi", "co the noi chuyen", "noi chuyen ve",
+            "ban biet gi", "ban hieu gi", "ban gioi gi",
+            "ho tro gi", "lam duoc nhung gi", "lam duoc nhung cai gi",
+            "chuc nang gi", "tinh nang gi", "kha nang",
+            "ban co the", "bạn có thể",
+            "ban ho tro", "ho tro duoc gi",
+            "toi co the hoi", "co the hoi gi",
+            "nhung chu de", "những chu de",
+        ]
+        return any(kw in plain for kw in capability_patterns)
 
     def _previous_user_topic(self, conversation: list[dict[str, str]]) -> str:
         for item in reversed(conversation):

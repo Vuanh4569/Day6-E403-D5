@@ -148,13 +148,11 @@ function initTheme() {
   }
 }
 
-if (themeToggle) {
-  themeToggle.addEventListener("click", () => {
-    document.body.classList.toggle("dark-theme");
-    const isDark = document.body.classList.contains("dark-theme");
-    storageSet(THEME_KEY, isDark ? "dark" : "light");
-  });
-}
+themeToggle.addEventListener("click", () => {
+  document.body.classList.toggle("dark-theme");
+  const isDark = document.body.classList.contains("dark-theme");
+  storageSet(THEME_KEY, isDark ? "dark" : "light");
+});
 
 /* ==========================================================================
    MARKDOWN PARSER
@@ -258,7 +256,9 @@ function parseMarkdown(text) {
 function renderEmptyState() {
   messages.innerHTML = `
     <section class="empty-state">
-      <div class="empty-state-logo">LO</div>
+      <div class="empty-state-logo">
+        <img src="avatar.png" alt="Learning OS Agent" style="width: 100%; height: 100%; object-fit: cover; border-radius: inherit;" />
+      </div>
       <h2>Hôm nay bạn muốn học gì?</h2>
       <p>Hỏi về bài học, lab, rubric, khái niệm hoặc thêm tệp bằng nút đính kèm để chuẩn bị cho phần phân tích tài liệu sau này.</p>
     </section>
@@ -275,7 +275,9 @@ function messageTemplate(role, content, index) {
     if (message.role === "agent") {
       return `
         <article class="message agent" data-message-id="${escapeHtml(message.id || "")}">
-          <div class="avatar" aria-hidden="true">LO</div>
+          <div class="avatar" aria-hidden="true">
+            <img src="avatar.png" alt="Learning OS Agent" style="width: 100%; height: 100%; object-fit: cover; border-radius: inherit;" />
+          </div>
           <div class="bubble">
             <div class="bubble-content">${renderedContent}</div>
             ${followUps}
@@ -310,12 +312,14 @@ function messageTemplate(role, content, index) {
   }
 
   if (role === "agent") {
-      const formattedContent = parseMarkdown(content);
-      return `
-        <article class="message agent">
-          <div class="avatar" aria-hidden="true">LO</div>
-          <div class="bubble">
-            <div class="bubble-content">${formattedContent}</div>
+    const formattedContent = parseMarkdown(content);
+    return `
+      <article class="message agent">
+        <div class="avatar" aria-hidden="true">
+          <img src="avatar.png" alt="Learning OS Agent" style="width: 100%; height: 100%; object-fit: cover; border-radius: inherit;" />
+        </div>
+        <div class="bubble">
+          <div class="bubble-content">${formattedContent}</div>
           <div class="message-actions" aria-label="Hành động tin nhắn">
             <button type="button" class="action-btn like-btn" onclick="toggleLikeMessage(this)" aria-label="Thích tin nhắn">
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
@@ -536,6 +540,91 @@ function addMessage(role, content, actions = []) {
   renderHistory();
 }
 
+function buildConversationPayload() {
+  const chat = getActiveConversation();
+  return chat.messages.slice(-10).map((message) => ({
+    role: message.role === "agent" ? "assistant" : message.role,
+    content: message.content,
+  }));
+}
+
+async function loadSourceFromText(text, label) {
+  if (!canUseBackend()) {
+    addMessage("agent", `Mình đã nhận ${label}, nhưng backend chưa mở nên chưa thể nạp source thật.`);
+    return;
+  }
+  try {
+    const result = await apiPost("/api/source", { source: text, title: label });
+    addMessage("agent", `Mình đã nạp source từ ${label}: **${result.title}**.`);
+  } catch (error) {
+    addMessage("agent", `Mình chưa nạp được source từ ${label}.\n\n${error.message}`);
+  }
+}
+
+const readAndUploadFile = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        await loadSourceFromText(reader.result, file.name);
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(reader.error);
+    if (file.name.toLowerCase().endsWith(".pdf")) {
+      reader.readAsDataURL(file);
+    } else {
+      reader.readAsText(file);
+    }
+  });
+};
+
+async function handleAttachedFiles(files) {
+  const supportedFiles = Array.from(files).filter((file) => {
+    const name = file.name.toLowerCase();
+    return name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".markdown") || name.endsWith(".pdf");
+  });
+
+  for (const file of supportedFiles) {
+    await readAndUploadFile(file);
+  }
+
+  const unsupported = Array.from(files).filter((file) => !supportedFiles.includes(file));
+  if (unsupported.length) {
+    addMessage("agent", "Hiện tại mình hỗ trợ tốt các tệp tin văn bản (.txt, .md, .markdown) và PDF (.pdf). Link GitHub hoặc web link sẽ được hỗ trợ khi bạn paste trực tiếp vào chat.");
+  }
+}
+
+async function processQuestion(question) {
+  if (canUseBackend()) {
+    try {
+      const response = await apiPost("/api/ask", {
+        question,
+        conversation: buildConversationPayload(),
+      });
+      const actions = Array.isArray(response.follow_up_options)
+        ? response.follow_up_options.map((option) => ({
+            label: option,
+            handler: () => {
+              input.value = option;
+              resizeInput();
+              form.requestSubmit();
+            },
+          }))
+        : [];
+      addMessage("agent", response.answer || "Mình chưa có câu trả lời phù hợp.", actions);
+      return;
+    } catch (error) {
+      addMessage("agent", `Backend đang lỗi nên mình trả lời dự phòng nhé.\n\n${error.message}`);
+      return;
+    }
+  }
+
+  addMessage("agent", buildFallbackReply(question));
+}
+
 function buildFallbackReply(question) {
   const normalized = question.toLowerCase();
 
@@ -633,14 +722,6 @@ function resizeInput() {
   input.style.height = Math.min(input.scrollHeight, 140) + "px";
 }
 
-function buildConversationPayload() {
-  const chat = getActiveConversation();
-  return chat.messages.map((message) => ({
-    role: message.role === "agent" ? "assistant" : message.role,
-    content: message.content,
-  }));
-}
-
 /* ==========================================================================
    FILE ATTACHMENTS LOGIC
    ========================================================================== */
@@ -669,63 +750,6 @@ function getFileIcon(fileName) {
     case 'rar': return '📦';
     default: return '📄';
   }
-}
-
-async function loadSourceFromText(text, label) {
-  if (!canUseBackend()) {
-    addMessage("agent", `Mình đã nhận ${label}, nhưng backend chưa mở nên chưa thể nạp source thật.`);
-    return;
-  }
-  try {
-    const result = await apiPost("/api/source", { source: text });
-    addMessage("agent", `Mình đã nạp source từ ${label}: **${result.title}**.`);
-  } catch (error) {
-    addMessage("agent", `Mình chưa nạp được source từ ${label}.\n\n${error.message}`);
-  }
-}
-
-async function handleAttachedFiles(files) {
-  const supportedTextFiles = Array.from(files).filter((file) => {
-    const name = file.name.toLowerCase();
-    return name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".markdown");
-  });
-
-  for (const file of supportedTextFiles) {
-    const content = await file.text();
-    await loadSourceFromText(content, file.name);
-  }
-
-  const unsupported = Array.from(files).filter((file) => !supportedTextFiles.includes(file));
-  if (unsupported.length) {
-    addMessage("agent", "Hiện tại mình nạp tốt file text hoặc markdown. Link GitHub, PDF hoặc web link sẽ được hỗ trợ khi bạn paste trực tiếp vào chat.");
-  }
-}
-
-async function processQuestion(question) {
-  if (canUseBackend()) {
-    try {
-      const response = await apiPost("/api/ask", {
-        question,
-        conversation: buildConversationPayload(),
-      });
-      const actions = Array.isArray(response.follow_up_options)
-        ? response.follow_up_options.map((option) => ({
-            label: option,
-            handler: () => {
-              input.value = option;
-              resizeInput();
-              form.requestSubmit();
-            },
-          }))
-        : [];
-      addMessage("agent", response.answer || "Mình chưa có câu trả lời phù hợp.", actions);
-      return;
-    } catch (error) {
-      addMessage("agent", `Backend đang lỗi nên mình trả lời dự phòng nhé.\n\n${error.message}`);
-    }
-  }
-
-  addMessage("agent", buildFallbackReply(question));
 }
 
 function renderSelectedFiles() {
@@ -774,7 +798,9 @@ function showTypingIndicator() {
   
   const indicatorHtml = `
     <article class="message agent" id="typingIndicator">
-      <div class="avatar" aria-hidden="true">LO</div>
+      <div class="avatar" aria-hidden="true">
+        <img src="avatar.png" alt="Learning OS Agent" style="width: 100%; height: 100%; object-fit: cover; border-radius: inherit;" />
+      </div>
       <div class="bubble">
         <div class="typing-dots">
           <span></span>
@@ -838,11 +864,13 @@ input.addEventListener("input", resizeInput);
 
 // Handle Enter to Submit (while Shift+Enter inserts newline)
 input.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     form.requestSubmit();
   }
 });
+
+
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -876,14 +904,6 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-document.querySelectorAll("[data-prompt]").forEach((button) => {
-  button.addEventListener("click", () => {
-    input.value = button.dataset.prompt;
-    resizeInput();
-    input.focus();
-  });
-});
-
 messages.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action-index]");
   if (!button) return;
@@ -896,6 +916,14 @@ messages.addEventListener("click", (event) => {
   if (action && typeof action.handler === "function") {
     action.handler();
   }
+});
+
+document.querySelectorAll("[data-prompt]").forEach((button) => {
+  button.addEventListener("click", () => {
+    input.value = button.dataset.prompt;
+    resizeInput();
+    input.focus();
+  });
 });
 
 /* ==========================================================================

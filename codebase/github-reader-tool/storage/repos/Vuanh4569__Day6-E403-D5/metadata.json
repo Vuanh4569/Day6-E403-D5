@@ -1,0 +1,63 @@
+{
+  "repo": "Vuanh4569/Day6-E403-D5",
+  "githubUrl": "https://github.com/Vuanh4569/Day6-E403-D5/tree/dev",
+  "savedAt": "2026-06-04T10:18:18.396Z",
+  "fileCount": 4,
+  "allowedExtensions": [
+    ".md",
+    ".markdown",
+    ".txt",
+    ".rst",
+    ".adoc",
+    ".csv",
+    ".tsv",
+    ".rtf",
+    ".tex",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".odt",
+    ".ppt",
+    ".pptx",
+    ".xls",
+    ".xlsx"
+  ],
+  "files": [
+    {
+      "path": "README.md",
+      "size": 3783,
+      "extension": ".md",
+      "type": "text",
+      "rawUrl": "https://raw.githubusercontent.com/Vuanh4569/Day6-E403-D5/HEAD/README.md",
+      "htmlUrl": "https://github.com/Vuanh4569/Day6-E403-D5/blob/HEAD/README.md",
+      "localPath": "/Users/vuanh4569/Coding/VinUniHomeWork/Day6-E403-D5/codebase/github-reader-tool/storage/repos/Vuanh4569__Day6-E403-D5/documents/README.md"
+    },
+    {
+      "path": "codebase/README.md",
+      "size": 1117,
+      "extension": ".md",
+      "type": "text",
+      "rawUrl": "https://raw.githubusercontent.com/Vuanh4569/Day6-E403-D5/HEAD/codebase/README.md",
+      "htmlUrl": "https://github.com/Vuanh4569/Day6-E403-D5/blob/HEAD/codebase/README.md",
+      "localPath": "/Users/vuanh4569/Coding/VinUniHomeWork/Day6-E403-D5/codebase/github-reader-tool/storage/repos/Vuanh4569__Day6-E403-D5/documents/codebase/README.md"
+    },
+    {
+      "path": "hackathon-rules.md",
+      "size": 4264,
+      "extension": ".md",
+      "type": "text",
+      "rawUrl": "https://raw.githubusercontent.com/Vuanh4569/Day6-E403-D5/HEAD/hackathon-rules.md",
+      "htmlUrl": "https://github.com/Vuanh4569/Day6-E403-D5/blob/HEAD/hackathon-rules.md",
+      "localPath": "/Users/vuanh4569/Coding/VinUniHomeWork/Day6-E403-D5/codebase/github-reader-tool/storage/repos/Vuanh4569__Day6-E403-D5/documents/hackathon-rules.md"
+    },
+    {
+      "path": "spec/README.md",
+      "size": 5897,
+      "extension": ".md",
+      "type": "text",
+      "rawUrl": "https://raw.githubusercontent.com/Vuanh4569/Day6-E403-D5/HEAD/spec/README.md",
+      "htmlUrl": "https://github.com/Vuanh4569/Day6-E403-D5/blob/HEAD/spec/README.md",
+      "localPath": "/Users/vuanh4569/Coding/VinUniHomeWork/Day6-E403-D5/codebase/github-reader-tool/storage/repos/Vuanh4569__Day6-E403-D5/documents/spec/README.md"
+    }
+  ]
+}

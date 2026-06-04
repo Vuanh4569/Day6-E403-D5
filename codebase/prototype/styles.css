@@ -207,9 +207,6 @@ button {
   display: grid;
   place-items: center;
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
-  font-size: 0.8rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
 }
 
 .drawer-brand strong {
@@ -436,9 +433,6 @@ button {
   box-shadow: 0 4px 14px var(--brand-glow);
   flex-shrink: 0;
   animation: pulseGlow 4s infinite alternate;
-  font-size: 0.82rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
 }
 
 @keyframes pulseGlow {
@@ -707,31 +701,6 @@ body.dark-theme .theme-toggle svg {
   opacity: 0;
   transition: opacity 0.25s ease;
   flex-wrap: wrap;
-}
-
-.follow-up-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.follow-up-actions button {
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid var(--border-color);
-  background: var(--surface-overlay);
-  color: var(--ink);
-  font-size: 0.78rem;
-  font-weight: 600;
-  transition: all 0.2s ease;
-}
-
-.follow-up-actions button:hover {
-  border-color: var(--border-active);
-  background: var(--surface-hover);
-  transform: translateY(-1px);
 }
 
 .message:hover .message-actions {

@@ -57,7 +57,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(public_result(result))
             return
         if path == "/api/source":
-            source = agent.load_source(str(body.get("source", "")))
+            source = agent.load_source(
+                str(body.get("source", "")),
+                title=body.get("title")
+            )
             self.send_json(
                 {
                     "title": source.title,
@@ -136,7 +139,7 @@ def normalize_conversation(raw: Any) -> list[dict[str, str]]:
         content = str(item.get("content", "")).strip()
         if role in {"user", "agent", "assistant"} and content:
             cleaned.append({"role": "assistant" if role == "agent" else role, "content": content})
-    return cleaned
+    return cleaned[-10:]
 
 
 def public_result(result: Any) -> dict[str, Any]:
@@ -152,9 +155,24 @@ def public_result(result: Any) -> dict[str, Any]:
 
 def main() -> None:
     port = int(os.getenv("PORT", "8060"))
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"Learning OS Support Agent running at http://127.0.0.1:{port}")
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    
+    # Lấy IP cục bộ để in ra màn hình cho người dùng dễ chia sẻ
+    import socket
+    local_ip = "127.0.0.1"
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
+
+    print(f"Learning OS Support Agent running at:")
+    print(f"  - Local:            http://127.0.0.1:{port}")
+    print(f"  - On Your Network:  http://{local_ip}:{port}")
     server.serve_forever()
+
 
 
 if __name__ == "__main__":

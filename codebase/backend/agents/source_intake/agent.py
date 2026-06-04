@@ -31,7 +31,7 @@ def detect_source_type(raw: str) -> str:
         return "github_repo"
     if "github.com" in value and "/blob/" in value:
         return "github_file"
-    if value.endswith(".pdf") or ".pdf?" in value:
+    if value.endswith(".pdf") or ".pdf?" in value or value.startswith("data:application/pdf;base64,"):
         return "pdf"
     if value.startswith("http://") or value.startswith("https://"):
         return "web"
