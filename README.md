@@ -1,5 +1,9 @@
-# Day 06 - 2A202600802 - Phạm Đình Phúc
-
+# Day 06 - 
+# Tên thành viên 
+# 2A202600571 - Hà Vũ Anh
+# 2A202600758 - Nguyễn Tuấn Anh
+# 2A202600793 - Đỗ Văn Cung
+# 2A202600802 - Phạm Đình Phúc
 ## Idea
 
 **Learning Content Intake Agent** cho học viên AI Thực Chiến / AI in Action hỏi về nội dung bài học, khái niệm, lab, rubric, ví dụ, hoặc cách áp dụng kiến thức vào bài làm.
