@@ -241,7 +241,7 @@ function renderEmptyState() {
   messages.innerHTML = `
     <section class="empty-state">
       <div class="empty-state-logo">
-        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <img src="avatar.png" alt="Learning OS Agent" style="width: 100%; height: 100%; object-fit: cover; border-radius: inherit;" />
       </div>
       <h2>Hôm nay bạn muốn học gì?</h2>
       <p>Hỏi về bài học, lab, rubric, khái niệm hoặc thêm tệp bằng nút đính kèm để chuẩn bị cho phần phân tích tài liệu sau này.</p>
@@ -255,7 +255,7 @@ function messageTemplate(role, content, index) {
     return `
       <article class="message agent">
         <div class="avatar" aria-hidden="true">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          <img src="avatar.png" alt="Learning OS Agent" style="width: 100%; height: 100%; object-fit: cover; border-radius: inherit;" />
         </div>
         <div class="bubble">
           <div class="bubble-content">${formattedContent}</div>
@@ -451,10 +451,15 @@ window.regenerateMessage = function(index) {
   renderMessages();
   
   const targetQuestion = userQuestion || "Tải tài liệu mới";
+  
+  // Show typing indicator
+  showTypingIndicator();
+  
   // Simulate AI typing delay
   window.setTimeout(() => {
+    hideTypingIndicator();
     addMessage("agent", buildDemoReply(targetQuestion));
-  }, 450);
+  }, 1200);
 };
 
 /* ==========================================================================
@@ -647,6 +652,36 @@ function renderSelectedFiles() {
   });
 }
 
+function showTypingIndicator() {
+  if (document.getElementById("typingIndicator")) return;
+  
+  const indicatorHtml = `
+    <article class="message agent" id="typingIndicator">
+      <div class="avatar" aria-hidden="true">
+        <img src="avatar.png" alt="Learning OS Agent" style="width: 100%; height: 100%; object-fit: cover; border-radius: inherit;" />
+      </div>
+      <div class="bubble">
+        <div class="typing-dots">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
+    </article>
+  `;
+  
+  quickPrompts.classList.add("hidden");
+  messages.insertAdjacentHTML("beforeend", indicatorHtml);
+  scrollToBottom();
+}
+
+function hideTypingIndicator() {
+  const indicator = document.getElementById("typingIndicator");
+  if (indicator) {
+    indicator.remove();
+  }
+}
+
 function createNewChat() {
   const chat = createConversation();
   conversations = [chat].concat(conversations);
@@ -711,10 +746,14 @@ form.addEventListener("submit", (event) => {
   renderSelectedFiles();
   resizeInput();
 
-  // Simulate thinking delay then reply
+  // Show thinking typing indicator
+  showTypingIndicator();
+
+  // Simulate thinking delay (1.2 seconds) then reply
   window.setTimeout(() => {
+    hideTypingIndicator();
     addMessage("agent", buildDemoReply(question || "tập tin mới tải lên"));
-  }, 500);
+  }, 1200);
 });
 
 document.querySelectorAll("[data-prompt]").forEach((button) => {
