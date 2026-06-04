@@ -1,0 +1,758 @@
+--- PAGE 1 ---
+HisGraphRAG: GraphRAG for Vietnamese Historical question answering
+Hoang-Thanh Nguyen1,2, Tung Le1,2, Huy Tien Nguyen 1,2,*
+1Faculty of Information Technology, University of Science, Ho Chi Minh city, Vietnam
+2Vietnam National University, Ho Chi Minh city, Vietnam
+23C11048@student.hcmus.edu.vn, {lttung, ntienhuy}@fit.hcmus.edu.vn
+*Corresponding author: Huy Tien Nguyen – ntienhuy@fit.hcmus.edu.vn
+Abstract
+Large Language Models (LLMs) often face
+issues with factual accuracy and hallucina-
+tions, especially in specific domains like his-
+tory. While Retrieval-Augmented Generation
+(RAG) and Graph-based RAG (GraphRAG) im-
+prove reasoning by integrating external knowl-
+edge, applying GraphRAG to historical data
+presents three key challenges: (1) redundant
+entities in the knowledge graph; (2) a lack of
+temporal understanding for historical events;
+and (3) potential for LLM generative capac-
+ity to be diluted by excessive retrieved infor-
+mation. We propose HisGraphRAG, a novel
+framework designed for historical question an-
+swering. HisGraphRAG addresses these is-
+sues through entity alignment during graph
+construction, temporal reasoning and rerank-
+ing for event contextualization, and filtering of
+irrelevant information to maintain LLM focus.
+Evaluated on a Vietnamese history university
+entrance exam dataset, HisGraphRAG signif-
+icantly boosts reasoning performance across
+various LLMs. This work offers a more reli-
+able and effective GraphRAG framework for
+historical inquiry, enhancing LLM applications
+in this crucial field.
+1 Introduction
+Multiple-choice question answering (MCQA) in
+the history domain poses significant challenges for
+large language models (LLMs), which often strug-
+gle with precise factual recall and chronological
+reasoning (Brown et al., 2020). This can lead
+to hallucination, the generation of factually incor-
+rect information (Ji et al., 2023), a problem espe-
+cially prevalent in less-documented historical con-
+texts like Vietnamese history (Kumar and Pavlick,
+2022).
+Retrieval-Augmented Generation (RAG) miti-
+gates this by supplementing LLMs with external
+documents, improving factual grounding (Lewis
+et al., 2020a). However, standard RAG struggles
+Figure 1: Accuracy Comparison: GraphRAG vs LLM-
+Only (Vietnamese University Entrance Exam)
+with the complex inter-entity relationships and tem-
+poral structures (Zhou et al., 2022) inherent in
+historical narratives (Lewis et al., 2020b). For in-
+stance, answering a question like, "During World
+War II, what was the impact of 1943 American
+aid to other countries?" requires reasoning about
+connections not explicitly present in the retrieved
+text. To address this, GraphRAG builds structured
+knowledge graphs into the RAG pipeline, modeling
+entities and their relationships (Microsoft Research,
+2024). While this enhances context, it introduces
+new limitations in historical domains. First, despite
+overall improvements, GraphRAG can paradoxi-
+cally perform worse than a naive LLM in certain
+cases, as shown in Figure 1. Second, it often cre-
+ates duplicated entities (e.g., "Soviet Union" and
+"Soviet") during indexing, fragmenting the knowl-
+edge graph as detailed in Table 1. Third, it fails to
+preserve temporal grounding, which is crucial for
+answering time-sensitive questions.
+To overcome these limitations, we propose His-
+GraphRAG, a novel framework with three targeted
+enhancements. First, we implement entity align-
+ment during indexing to merge semantically equiv-
+alent nodes, creating a cleaner graph. Second, we
+
+--- PAGE 2 ---
+Number of nodes Number of relations
+W/o Entity alignment 1334 681
+Entity alignment 1186 510
+% reduction 11.09% 25.11%
+Table 1: Number of duplicated entity (Building on the
+summary version of grade 12 Vietnamese history book)
+introduce temporal retrieval, using time expres-
+sions in the query to fetch chronologically rele-
+vant events. Finally, inspired by human test-taking
+strategies, we add an answer candidate filtering
+mechanism to eliminate implausible options before
+retrieval, sharpening the reasoning focus. Our main
+contributions are:
+• Identify and address three critical limitations
+of GraphRAG in historical QA: duplicated en-
+tities, loss of temporal context, and distraction
+from irrelevant information.
+• Introduce HisGraphRAG, a system that in-
+tegrates entity alignment, temporal retrieval,
+and question candidates filtering to improve
+performance on Vietnamese historical QA.
+Then we demonstrate that our model’s se-
+lective reasoning strategies effectively en-
+hance accuracy on university entrance exam
+datasets.
+2 Related work
+Traditional RAG methods primarily rely on re-
+trieving relevant text passages based on seman-
+tic similarity, but they struggle to capture com-
+plex relational and temporal knowledge inher-
+ent in domains like history (Procko and Ochoa,
+2024). This limitation motivated the develop-
+ment of Graph Retrieval-Augmented Generation
+(GraphRAG) (Microsoft Research, 2024), which
+integrates structured knowledge graphs to provide
+richer, relational context for LLMs. GraphRAG
+retrieves graph elements such as nodes, triples,
+or subgraphs relevant to a query, enabling multi-
+hop reasoning over interconnected entities and re-
+lations.
+GraphRAG is designed to minimize hallucina-
+tions and improve knowledge updates in LLM
+by integrating information from external graph
+knowledge (Procko and Ochoa, 2024; Han et al.,
+2024). G -Retriever (He et al., 2024) uses em-
+bedding cosine similarity to identify relevant
+nodes and edges for the query, then constructs
+the subgraph using the Prize -Collecting Steiner
+Tree (PCST) algorithm, which generates an accu-
+rate and compact subgraph for generation (He
+et al., 2024; Yiqian Huang, 2025). The RoG
+method (Jiang et al., 2024) proposes a “plan-
+ning–retrieval–reasoning” model, in which reason-
+ing paths are taken according to a pre-determined
+plan before performing inference. Meanwhile,
+GNN-RAG (Mavromatis and Karypis, 2024) uti-
+lizes Graph Neural Networks to handle the com-
+plex structure in the knowledge graph, combining
+retrieval augmentation techniques to increase the di-
+versity of the input data. However, the performance
+of these methods depends deeply on the quality of
+the graph, and when the resulting subgraph con-
+tains a lot of noise or is irrelevant, the performance
+degrades significantly (He et al., 2024).
+Despite these advances, GraphRAG faces several
+challenges. First, retrieving noisy and irrelevant in-
+formation will downgrade LLM performence. It’s
+researched and improved in Guo and al. (2025)
+research by adding two stages filtering in querying
+process. However, this improvement comes at the
+cost of increased response time in generating the
+final answer. Our entity alignment method will re-
+duce duplicated or misaligned entities durign index-
+ing step which reduces the knowledge graph size
+while remaining retrieval effectiveness. Second,
+temporal information and relationships between
+historical events are often overlooked, limiting the
+model’s ability to reason about event sequences
+and causality. Third, excessive reliance on external
+graph knowledge can suppress the intrinsic rea-
+soning capacity of the base LLM, then degrading
+overall performance.
+3 Method
+To address the key challenges identified in our pre-
+liminary studies—namely entity duplication, irrele-
+vant retrievals, and lack of temporal reasoning—we
+propose a new framework HisGraphRAG de-
+signed specifically for historical question answer-
+ing with GraphRAG. An overview of our frame-
+work is shown in Figure 2, containing three central
+principles:
+• Entity Alignment: Redundant or variant enti-
+ties (e.g., “President Ho Chi Minh” vs. “Ho
+Chi Minh”) dilute knowledge and compro-
+mise reasoning. Aligning these into unified
+representations is essential to preserve seman-
+tic coherence and reduce graph fragment.
+
+--- PAGE 3 ---
+Figure 2: An overview of the HisGraphRAG process, from indexing through querying
+• Answer candidates Filtering: GraphRAG’s
+retrieval process often includes irrelevant or
+noisy entries. These not only add confusion
+but can override otherwise correct LLM re-
+sponses. Selectively filtering and prioritizing
+useful information is thus critical.
+• Temporal Awareness: Historical queries of-
+ten hinge on timeline-sensitive information.
+Incorporating temporal cues into retrieval and
+reranking ensures the selected context aligns
+with the question’s timeframe.
+3.1 Doc Chunking
+The input dataset for our system comprises his-
+tory textbooks, which are inherently structured into
+well-defined chapters and sections. Traditional doc-
+ument chunking strategies—such as segmenting by
+a fixed number of tokens or characters—fail to pre-
+serve the semantic and topical coherence necessary
+for downstream tasks like retrieval and graph con-
+struction. To address this, we adopt a section-aware
+chunking strategy tailored to the structural granu-
+larity of historical texts.
+Let a document be composed of a sequence
+of chapters C = {c1, c2, ..., cn}, where each
+chapter ci contains a sequence of sections Si =
+{Si1, Si2, ..., Sim}. Each section Sij is treated as
+a primary unit of chunking. To maintain context
+continuity across sections, we apply overlapping
+context windows by concatenating with a portion
+of the preceding section when available. Formally,
+each chunk xij is generated as:
+xij = Sij−k||Sij (1)
+where k is the overlapping context parameter
+and || denotes concatenation.
+To comply with the LLM input limitations, If the
+resulting chunk xij exceeds a token threshold Tmax,
+we recursively subdivide it into smaller chunks
+x1
+ij, x2
+ij, . . . , xl
+ij such that:
+len(xl
+ij) ≤ Tmax, ∀l (2)
+The history textbooks are provided in PDF for-
+mat, which includes both text and non-textual
+elements (e.g., illustrations, charts, and exam
+questions). We preprocess these documents by
+converting each page into an image and then
+employ a visual-language model (VLM), or an
+LLM equipped with document vision capabili-
+ties, to extract textual descriptions from visual el-
+ements. This step ensures that all important con-
+tent—especially figures relevant to historical nar-
+ratives—is retained in natural language form. At
+the same time, we filter out irrelevant components,
+such as quiz questions, using a classification filter
+tuned to remove interrogative-style sentences. This
+preprocessing ensures that each document chunk
+is both semantically cohesive and enriched with
+textual equivalents of visual data, thus improving
+the quality of downstream retrieval and reasoning
+stages.
+3.2 Entities and Relationships Extraction
+Since our focus is exclusively on historical texts,
+we design the entity and relationship extraction pro-
+cess to target concepts that are particularly relevant
+to the domain. Specifically, we extract information
+related to historical events, key figures, locations,
+organizations, strategies, and their associated im-
+pacts. Each document chunk is processed using a
+LLM to identify named entities and infer relation-
+ships between them. For every pair of related enti-
+ties, we assign a single relation type: RELATE_TO),
+
+--- PAGE 4 ---
+accompanied by a natural language description that
+explains the nature of the relationship. This design
+choice maintains simplicity while still preserving
+the contextual meaning between entities.
+• A graph database that stores entities as nodes
+and their RELATE_TO relationships as edges,
+including descriptive annotations.
+• Identities was categorized into: person, orga-
+nization, event, place, action, strategy, impact.
+• A SQL database that records temporal at-
+tributes of events and entities, enabling
+chronological filtering in later retrieval stages.
+It is important to note that, unlike Microsoft’s
+GraphRAG implementation, we do not include any
+community reports or crowdsourced annotations.
+Our method strictly constructs knowledge from the
+source documents themselves, maintaining a clean
+and verifiable information graph suitable for history
+domain.
+3.3 Entity Alignment
+As history textbooks are organized by chapters and
+sections, entities representing the same real-world
+concept (e.g., "Soviet", "Soviet Union") may ap-
+pear multiple times across different chunks or chap-
+ters with slight variations in name or description.
+If not resolved, this entity duplication introduces
+noise in the retrieval process—returning redundant
+or conflicting results—and fragments relationships,
+weakening the structure of the knowledge graph.
+To address this, we perform entity alignment using
+a large language model (LLM) with extended con-
+text capabilities. We aggregate entities extracted
+across all sections and send them in batches to the
+LLM, which performs a semantic merge of dupli-
+cate or near-duplicate entities. For each group of
+similar entities, the model:
+• Selects a canonical name and be validated by
+LLM then human
+• Merges descriptions into a unified summary
+• Merges associated relationships while elimi-
+nating redundancy
+This process ensures that each unique histori-
+cal figure, event, or organization is represented
+by a single unified node in the graph, improv-
+ing both the retrieval precision and the integrity
+of relational links. By consolidating entity rep-
+resentations and summarizing associated content,
+the resulting graph becomes more compact, coher-
+ent, and interpretable—especially critical for query
+tasks that involve reasoning over historical time-
+lines or cause-effect chains.
+3.4 Answer candidates Filtering
+To evaluate the effectiveness of our system, we con-
+sider a multiple-choice question-answering setting
+tailored for historical content. Each question is
+accompanied by four candidate options: A, B, C,
+D, with exactly one correct answer. The task is
+to select the correct option using the knowledge
+extracted from the document graph. A key chal-
+lenge arises in the retrieval process: all answer
+options contribute equally to document retrieval re-
+gardless of correctness. This leads to the inclusion
+of distracting or irrelevant content from incorrect
+answers, which can degrade both retrieval preci-
+sion and model confidence. In human examination
+settings, students naturally focus more on plausi-
+ble answers while disregarding options that appear
+clearly incorrect. Inspired by this behavior, we in-
+troduce an Answer candidates filtering mechanism
+that prioritizes likely correct answers.
+Given a question q and four answer choices A =
+{a1, a2, a3, a4}, we compute:
+P (ai | q) = LLM_score(q, ai) (3)
+Let θ be a confidence threshold. We retain only
+those options such that:
+P (ai | q) ≥ θ (4)
+This filtering strategy offers two major benefits.
+First, it aligns with the reasoning strategy of profi-
+cient human test-takers: before committing to an
+answer, they mentally discard distractors that are
+clearly implausible, thereby focusing attention on a
+narrower and more reliable candidate set. Second,
+from a technical perspective, the multiple-choice
+setup inherently introduces redundancy — both be-
+tween the question and its answer candidates, and
+among the candidates themselves. Without filter-
+ing, this redundancy propagates into the retrieval
+process, increasing the risk of irrelevant or noisy
+evidence being incorporated. By retaining only
+those candidates whose likelihood surpasses the
+confidence threshold, our method reduces retrieval
+redundancy and sharpens the focus on semantically
+
+--- PAGE 5 ---
+meaningful information, ultimately improving both
+retrieval efficiency and answer accuracy.
+3.5 Graph & Temporal Retrieval
+In this step, we integrate semantic graph-based
+retrieval and temporal filtering to enhance the con-
+textual information fed into the final prompt. These
+two retrieval processes leverage the structured out-
+puts from Step 2: the graph database (containing
+entities and relationships) and the time-indexed
+event database.
+Graph-based Retrieval:
+Given a query q which contains question and
+answer candidates from Step 4, we embed them
+into a dense vector ⃗ qusing a pre-trained model.
+Each graph node ej has an embedding⃗ ej. Compute
+similarity:
+vq = Embedded(q) (5)
+Simultaneously, each entity node e in the graph
+database is stored with its own semantic embedding
+ve, computed from both the entity’s name and its
+description. Retrieval is performed by computing
+similarity scores:
+sim(q, ej) = cos( ⃗ vq, ⃗ ve) (6)
+Entities with similarity above a retrieval thresh-
+old δ are selected:
+εretrieved = {e ∈ E | sim(q, e) ≥ δ} (7)
+For each retrieved entity e, we also extract its as-
+sociated relationships and descriptions to construct
+a subgraph relevant to the question context
+Temporal Retrieval:
+To complement graph-based retrieval, we per-
+form time-aware filtering based on temporal cues
+in the query. If the query q contains a time ref-
+erence (e.g., a year or period), we extract it and
+define a time window:
+[tstart, tend] = [tq − ∆t, tq + ∆t] (8)
+Finally, the union of retrieved graph-based and
+time-based information:
+Cq = εgraph ∪ εtemporal ∪ εtextchunk (9)
+3.6 Reranking
+The retrieval stage often results in a large set of
+semantically and temporally relevant entities, re-
+lationships, and events. However, not all of these
+contribute equally to answering the given question.
+Including too many can overwhelm the prompt and
+reduce the effectiveness of the language model’s
+reasoning. To ensure focus and precision, we intro-
+duce a reranking mechanism driven by the LLM
+itself.
+Instead of relying on a traditional scoring func-
+tion or trained reranker, we leverage the LLM’s
+internal reasoning to identify the most relevant con-
+text items. Specifically, we prompt the LLM to
+act as a selector, choosing a subset of the retrieved
+content that is most likely to support answering the
+question.
+Given a query q and retrieved context Cq =
+{c1, c2, ..., cn}, we prompt the LLM to select the
+most relevant k items:
+Ctop-k
+q = Select(q, Cq, k) (10)
+where k is typically set to a small number to
+maintain prompt compactness.
+This LLM-guided reranking allows for context-
+aware prioritization, capturing subtle relevance sig-
+nals that might be missed by static similarity met-
+rics. The selected top-k entities and facts are then
+composed into the final input prompt for the an-
+swering model, significantly improving focus and
+factual consistency in the output.
+4 Experiment
+4.1 Dataset
+To evaluate the effectiveness of our GraphRAG-
+based retrieval and reasoning framework in the do-
+main of historical question answering, we construct
+both a retrieval corpus and a evaluation dataset.
+Retrieval Corpus: We use the official Grade 12
+Vietnamese History textbook, which serves as the
+knowledge base for information retrieval and graph
+construction. The textbook is representative of high
+school-level historical content and provides rich,
+structured information in the form of chapters and
+sections, including text, figures, and timelines.
+Evaluation Dataset: For the downstream ques-
+tion answering task, we use real-world standardized
+multiple-choice questions from the Vietnamese
+University Entrance Exams in the years 2017 and
+2018. For each year, we include three official exam
+
+--- PAGE 6 ---
+codes, resulting in a total of 120 multiple-choice
+questions (3 sets × 40 questions) called VUEE-
+2017 and VUEE-2018. Each question consists of
+one correct answer and three distractors, following
+the standard national testing format.
+4.2 Experimental setting
+We implement our GraphRAG-based system using
+a modular architecture combining large language
+models, graph databases, and vector search engines.
+The key components and hyperparameters are con-
+figured as follows:
+• Main Language Model: We use ChatGPT-4o
+mini as the primary model for all reasoning
+tasks, including entity alignment, reranking,
+and final answer generation. Its ability to han-
+dle long-context inputs and follow prompt in-
+structions makes it well-suited for this struc-
+tured retrieval setting.
+• Embedding Model: For dense retrieval and
+semantic similarity computation, we use the
+text-embedding-3-small model. All enti-
+ties and question inputs are embedded using
+this model and stored for efficient nearest-
+neighbor search.
+• Graph Database: We store structured entities
+and their relationships using Neo4j, which
+enables traversal and context construction via
+RELATE_TO edges.
+• Vector Database: All embeddings are stored
+and queried through Milvus, which supports
+high-performance similarity search over dense
+vector representations.
+– Temporal Window: For time-based fil-
+tering, we extract time expressions from
+the query and apply a ±1 year buffer to
+retrieve relevant historical events.
+– Answer Filtering Threshold: For ques-
+tion option filtering (Step 4), we dis-
+card any answer option with a model-
+estimated confidence below 15%.
+– Reranking Top-k: After retrieval, we
+prompt the LLM to select the top 15 most
+relevant context items for final reasoning.
+• Implementation Base: Our system builds upon
+and extends the open-source GraphRAG im-
+plementation from the public repository 1.
+1https://github.com/ImmortalDemonGod/
+nanographrag
+5 Result
+5.1 Indexing result
+To evaluate the efficiency cost of the proposed en-
+tity alignment step, we measured token usage and
+processing time during the indexing phase, both
+with and without alignment.
+Cost w/o entity alignment with entity alignment
+In token consumption 605k 669k in
+Out token consumption 190k 219k out
+Time consumption 322s 270s
+Table 2: LLM consumption during indexing step
+As shown in Table 2, applying entity alignment
+leads to a modest increase in input token consump-
+tion from 605k to 669k tokens, an approximate
+10.6% increase. Similarly, output token usage in-
+creases from 190k to 219k tokens, reflecting the
+additional summarization and relational consoli-
+dation introduced during alignment. Despite this
+increase in token count, the overall time consump-
+tion decreases slightly, from 322 to 270 seconds,
+possibly due to the more compact and structured
+representation of merged entities reducing down-
+stream processing complexity.
+5.2 Querying results
+We evaluate the effectiveness of our proposed
+system, HisGraphRAG, along with several base-
+line methods and incremental variations, on two
+standardized historical question-answering bench-
+marks: VUEE-2017 and VUEE-2018. Table 3
+reports the accuracy, token consumption, and re-
+sponse time across all methods.
+For the baseline comparison, the LLM-only set-
+ting—where the model answers without any ex-
+ternal retrieval—achieves the lowest accuracy on
+both datasets (68.3% for VUEE-2017 and 50.8%
+for VUEE-2018), indicating the insufficiency of
+parametric knowledge alone for detailed historical
+reasoning. When retrieval is added in a naive form
+via NaiveRAG, which lacks any structured under-
+standing of entities or relationships, performance
+improves modestly (72.5% and 54.2%), suggest-
+ing that even simple information augmentation can
+be beneficial. These baselines provide a reference
+point for the gains enabled by structured and fil-
+tered retrieval.
+When moving to GraphRAG, which incorporates
+entity-level structure and relationship reasoning,
+the accuracy improves significantly to 77.5% for
+VUEE-2017 and 60.0% for VUEE-2018. Adding
+
+--- PAGE 7 ---
+Method VUEE-2017 VUEE-2018
+Acc Token Time Acc Token Time
+LLM-only 68.3% 22k 80s 50.8% 23k 80s
+NaiveRAG 72.5% 102k 145s 54.2% 95k 150s
+GraphRAG 77.5% 920k 210s 60.0% 907k 218s
+GraphRAG + Entity alignment 76.7% 1.4M 377s 61.7% 1.4M 385s
+GraphRAG + Temporal & Rerank 73.3% 1.7M 927s 56.7% 1.7M 773s
+GraphRAG + Answer candidates Filter 80.8% 949k 384s 63.3% 983k 360s
+HisGraphRAG (Ours) 81.7% 2.2M 977s 70.8% 1.6M 922s
+Table 3: HisGraphRAG accuracy result on VUEE-2017 and VUEE-2018 dataset
+entity alignment to GraphRAG yields mixed re-
+sults: a slight decrease in 2017 (76.7%) but a
+notable improvement in 2018 (61.7%), indicating
+that alignment becomes more impactful when the
+dataset contains more ambiguity or entity duplica-
+tion. Interestingly, adding temporal retrieval and
+reranking in isolation causes a decline in accu-
+racy (73.3% and 56.7%), likely because this con-
+figuration pulls in excess temporal content not al-
+ways directly relevant to the question—overloading
+the prompt and reducing model focus. However,
+when question filtering is applied alone, accuracy
+increases sharply (80.8% and 63.3%), highlight-
+ing the importance of removing low-confidence
+distractors before retrieval. Ultimately, the His-
+GraphRAG system, which integrates all compo-
+nents—including alignment, temporal retrieval,
+reranking, and filtering—achieves the highest ac-
+curacy on both datasets (81.7% and 70.8%).
+While HisGraphRAG achieves the best results,
+it does so with increased computational cost. The
+number of tokens consumed rises to 2.2M and
+1.6M respectively for VUEE-2017 and VUEE-
+2018, and average response time approaches 900
+seconds. These costs reflect the additional rea-
+soning steps introduced in the pipeline, but are
+justified in scenarios where accuracy and context
+richness are more important than latency. Notably,
+all systems perform worse on VUEE-2018 than
+on VUEE-2017, which is consistent with histor-
+ical data showing that the 2018 exam included
+more difficult questions, as reflected in average
+student scores. Even under these conditions, His-
+GraphRAG maintains strong performance margins,
+reinforcing its robustness across varying levels of
+difficulty.
+5.3 Error analysis
+We analyze one illustrative example from our test
+data to demonstrate how each component of our
+method contributes to improved accuracy.
+Example Question:
+At the Second National Congress (Febru-
+ary 1951), the Indochinese Communist
+Partydecided to establish in each country
+of Indochina:
+A. Marxist-Leninist Party (Correct)
+B. Coalition Government
+C. United Front
+D. Armed Force
+We summarize the impact of each component in
+Table 4.
+Our proposed method, HisGraphRAG, signif-
+icantly improves the precision and relevance of
+retrieval by incorporating three key strategies:
+• Entity Alignment resolves redundancies by
+merging semantically identical entities into
+canonical representations, thus eliminating un-
+necessary duplication and optimizing prompt
+usage.
+• Temporal Retrieval leverages temporal con-
+text to filter information, constraining re-
+trieved historical events within a precise
+chronological window relevant to the ques-
+tion.
+• Answer Candidate Filtering systematically
+estimates the probability of correctness for
+each potential answer choice, proactively re-
+moving irrelevant distractors to avoid mislead-
+ing the model.
+
+--- PAGE 8 ---
+Component Without our Method (GraphRAG) With our Method (HisGraphRAG)
+Entity Alignment Retrieved redundant entities “In-
+dochinese Communist Party” and
+“Communist Party of Indochina” ,
+wasting prompt space and causing du-
+plication.
+Merged duplicate entities into a sin-
+gle canonical form “Indochinese
+Communist Party”, reducing redun-
+dancy and increase useful relation-
+ships.
+Temporal Retrieval Retrieved irrelevant congresses (First
+and Third), confusing the model with
+unrelated decisions.
+Extracted date (1951) and retrieved
+events within ±1 year only, filtering
+out irrelevant historical congresses.
+Answer Candidate
+Filtering
+Included distracting information
+about Coalition Governments formed
+in different historical contexts, mis-
+leading the model toward incorrect
+Option B.
+Filtered out irrelevant candidates by
+estimating answer probabilities, en-
+suring only contextually relevant evi-
+dence is included.
+Table 4: Comparison of outputs with and without key components of our proposed method (HisGraphRAG).
+Together, these improvements collectively nar-
+row evidence to highly relevant, concise, and
+contextually precise content, markedly enhancing
+the probability of correctly identifying the out-
+put— Marxist-Leninist Party instead of United
+Front (answer from GraphRAG). acknowledge-
+ment
+6 Conclusion
+In this work, we presented HisGraphRAG, a novel
+retrieval-augmented generation (RAG) framework
+specifically designed to address the challenges of
+historical multiple-choice question answering. Our
+method incorporates four key components—entity
+alignment, temporal-aware retrieval, contextual
+reranking, and candidate answer filtering—to de-
+liver more accurate and contextually grounded
+responses. By aligning temporal and entity-
+level information through structured graph-based
+knowledge and targeted retrieval strategies, His-
+GraphRAG significantly enhances the reasoning
+capability of large language models in historical do-
+mains. Compared to standard RAG and GraphRAG
+baselines, our approach achieves notable gains in
+accuracy, demonstrating its ability to reduce confu-
+sion caused by duplicated entities, temporal incon-
+sistencies, and irrelevant distractors. These find-
+ings underscore the critical importance of integrat-
+ing structured semantic knowledge and temporal
+constraints to support complex historical under-
+standing and decision-making.
+While HisGraphRAG shows promising improve-
+ments, it also increases computational cost due to
+longer query times and higher token consumption.
+In future work, we plan to optimize the temporal
+retrieval process, explore more efficient indexing
+strategies, and develop scalable entity alignment
+techniques, such as hybrid embedding methods and
+rule-based clustering. These enhancements will
+help make the approach faster and more practical
+for large-scale and real-time applications.
+7 Acknowledgement
+This research is partially funded by the Vingroup
+Innovation Foundation (VINIF) under the grant
+number VINIF.2021.JM01.N2
+References
+Tom Brown, Benjamin Mann, Nick Ryder, Melanie Sub-
+biah, Jared D. Kaplan, and 1 others. 2020. Language
+models are few-shot learners. In Advances in Neural
+Information Processing Systems, volume 33, pages
+1877–1901. Curran Associates, Inc.
+Kai Guo and al. 2025. Empowering GraphRAG with
+Knowledge Filtering and Integration. arXiv preprint
+arXiv:2503.13804v1.
+Haoyu Han, Yu Wang, Harry Shomer, Kai Guo, Ji-
+ayuan Ding, Yongjia Lei, and et al. 2024. Retrieval-
+augmented generation with graphs (graphrag). arXiv
+preprint arXiv:2501.00309.
+Xiaoxin He, Yijun Tian, Yifei Sun, Nitesh Chawla,
+Thomas Laurent, Yann LeCun, Xavier Bresson, and
+Bryan Hooi. 2024. G-retriever: Retrieval-augmented
+generation for textual graph understanding and ques-
+tion answering. Poster #4607, East Exhibit Hall A -C.
+
+--- PAGE 9 ---
+Zhijing Ji, Nayeon Lee, Rita Frieske, Tiezheng Yu,
+Dan Su, Yan Xu, Etsuko Ishii, Yujin Bang, Andrea
+Madotto, and Pascale Fung. 2023. Survey of halluci-
+nation in natural language generation. ACM Comput-
+ing Surveys (CSUR), 55(12):1–38.
+Boran Jiang, Yuqi Wang, Yi Luo, Dawei He, Peng
+Cheng, and Liangcai Gao. 2024. Reasoning on ef-
+ficient knowledge paths: Knowledge graph guides
+large language model for domain question answering.
+2024 IEEE International Conference on Knowledge
+Graph (ICKG), pages 142–149.
+Shailza Kumar and Ellie Pavlick. 2022. Revisiting zero-
+shot question answering performance of multilingual
+language models on low-resource languages. In Find-
+ings of the Association for Computational Linguistics:
+EMNLP 2022, pages 3669–3679.
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio
+Petroni, Vladimir Karpukhin, Naman Goyal, Douwe
+Kiela, Anurag Batra, Tim Rocktäschel, and Sebas-
+tian Riedel. 2020a. Retrieval-augmented generation
+for knowledge-intensive nlp tasks. In Advances in
+Neural Information Processing Systems.
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio
+Petroni, Vladimir Karpukhin, Naman Goyal, Mandar
+Kulkarni, Mike Luo, Ian Wigham, Daniel Beck, and
+1 others. 2020b. Retrieval-augmented generation
+for knowledge-intensive nlp tasks. In Advances in
+Neural Information Processing Systems, volume 33,
+pages 9459–9474.
+Costas Mavromatis and George Karypis. 2024. Gnn-rag:
+Graph neural retrieval for large language model rea-
+soning. ICLR 2025 Conference.
+Microsoft Research. 2024. GraphRAG:
+Graph-Augmented Retrieval for LLMs.
+https://microsoft.github.io/graphrag/.
+Tyler Thomas Procko and Omar Ochoa. 2024. Graph
+retrieval-augmented generation for large language
+models: A survey. 2024 Conference on AI, Science,
+Engineering, and Technology (AIxSET), pages 166–
+169.
+Xiaokui Xiao Yiqian Huang, Shiqi Zhang. 2025. A
+cost-efficient multi-granular indexing framework for
+graph-rag. arXiv preprint arXiv:2502.09304.
+Yichong Zhou, Mo Yu, Tongtao Zhao, Huan Sun, and
+Claire Cardie. 2022. Temporal question answering
+with sequential temporal graphs. In Proceedings
+of the 2022 Conference on Empirical Methods in
+Natural Language Processing, pages 740–753.
