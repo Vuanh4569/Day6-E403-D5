@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Learning OS Support Agent</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace" aria-label="Learning OS support agent workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">AI Thực Chiến · Learning OS</p>
+            <h1>Learning OS Support Agent</h1>
+          </div>
+          <div class="status-pill" id="routePill">Ready</div>
+        </header>
+
+        <section class="composer" aria-label="Chat composer">
+          <div class="chat-window" id="chatWindow" aria-live="polite"></div>
+
+          <div class="question-box">
+            <label for="questionInput">Câu hỏi của học viên</label>
+            <textarea id="questionInput" rows="4" placeholder="Ví dụ: Trong slide Day05, build slice là gì?"></textarea>
+            <div class="controls">
+              <button id="sendBtn" type="button">Ask agent</button>
+              <button id="sampleGeneralBtn" type="button" class="secondary">General</button>
+              <button id="sampleCourseBtn" type="button" class="secondary">Course</button>
+              <button id="sampleAmbiguousBtn" type="button" class="secondary">Ambiguous</button>
+              <button id="sampleOpsBtn" type="button" class="secondary">Ops</button>
+              <button id="resetBtn" type="button" class="ghost">Reset</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="source-panel" aria-label="Source controls">
+          <div>
+            <label for="sourceInput">Course source / link / text</label>
+            <textarea id="sourceInput" rows="5" placeholder="Paste GitHub repo/file link, PDF link, web link, hoặc text từ slide/README/rubric."></textarea>
+          </div>
+          <div class="controls">
+            <button id="loadSourceBtn" type="button">Load source</button>
+            <button id="sampleTextBtn" type="button" class="secondary">Sample text</button>
+            <button id="sampleGitBtn" type="button" class="secondary">GitHub link</button>
+            <button id="samplePdfBtn" type="button" class="secondary">PDF link</button>
+          </div>
+        </section>
+
+        <section class="grid" aria-label="Agent state">
+          <article class="panel">
+            <h2>Route Trace</h2>
+            <ol id="traceList"></ol>
+          </article>
+
+          <article class="panel">
+            <h2>Tool Calls</h2>
+            <ol id="toolList"></ol>
+          </article>
+
+          <article class="panel">
+            <h2>Source Library</h2>
+            <ul id="sourceList"></ul>
+          </article>
+
+          <article class="panel">
+            <h2>Retrieved Evidence</h2>
+            <ul id="evidenceList"></ul>
+          </article>
+
+          <article class="panel">
+            <h2>Answer Contract</h2>
+            <div id="answerContract" class="output-text muted">Agent chưa chạy.</div>
+          </article>
+
+          <article class="panel warning">
+            <h2>Unknown / Refusal</h2>
+            <div id="refusalBox" class="output-text muted">Agent sẽ từ chối khi thiếu course source hoặc câu hỏi là rule nội bộ.</div>
+          </article>
+        </section>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
